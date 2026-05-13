@@ -169,7 +169,8 @@ REST endpoints (under `/api/`):
 ```
 system/    snapshot, info, connections, devices, camera_roles,
            simbad, ekos_state, ekos_start, ekos_stop, ekos_toggle,
-           qr (pairing QR with Tailscale IP)
+           qr (pairing QR with Tailscale IP),
+           gui_apps_state, launch_kstars, launch_phd2  (v0.2.30+)
 mount/     status, goto, park, unpark, abort, track, slew, slew_rate
 camera/    status, expose, abort, cooler, gain, offset, binning, ...
 focuser/   status, abs, rel, abort, autofocus (iterative bridge),
