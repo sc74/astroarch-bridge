@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Astroarch Bridge
+Comment=Dashboard backend per app mobile (Zarletti-Osservatorio Jupiter)
+Exec=/usr/bin/python /home/astronaut/astroarch-bridge-dashboard/astroarch_bridge_dashboard.py
+Icon=/home/astronaut/astroarch-bridge-dashboard/astroarch_bridge.png
+Terminal=false
+Categories=Science;Astronomy;Utility;
+StartupNotify=true

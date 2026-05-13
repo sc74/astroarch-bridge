@@ -1,0 +1,36 @@
+[Unit]
+Description=Astroarch Bridge - Backend daemon for Astroarch Interface mobile app
+Documentation=https://github.com/zarletti/astroarch-interface
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Esegui come utente non privilegiato (creato dall'install script)
+User=astroarch
+Group=astroarch
+ExecStart=/usr/bin/python3 -m astroarch_bridge
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/astroarch/.config/astroarch-bridge /home/astroarch/Pictures/Ekos
+PrivateTmp=true
+LockPersonality=true
+RestrictRealtime=true
+
+# Environment overrides (opzionale - decommentare per personalizzare)
+# Environment=ASTROARCH_PORT=8765
+# Environment=ASTROARCH_INDI_HOST=127.0.0.1
+# Environment=ASTROARCH_INDI_PORT=7624
+# Environment=ASTROARCH_PHD2_HOST=127.0.0.1
+# Environment=ASTROARCH_PHD2_PORT=4400
+# Environment=ASTROARCH_LOG_LEVEL=INFO
+
+[Install]
+WantedBy=multi-user.target

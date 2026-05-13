@@ -1,0 +1,42 @@
+# Maintainer: Zarletti-Osservatorio Jupiter
+pkgname=astroarch-bridge
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Backend daemon per Astroarch Interface Android app - clone live INDI/Ekos/PHD2"
+arch=('any')
+url="https://github.com/zarletti/astroarch-interface"
+license=('MIT')
+depends=(
+  'python>=3.11'
+  'python-fastapi'
+  'python-uvicorn'
+  'python-pydantic'
+  'python-pydantic-settings'
+  'python-websockets'
+  'python-watchdog'
+  'python-astropy'
+  'python-numpy'
+  'python-pillow'
+)
+makedepends=('python-setuptools' 'python-pip')
+backup=()
+source=()  # built locally
+sha256sums=()
+
+build() {
+  cd "$srcdir/../.."
+  python -m pip install --target="$srcdir/_build" .
+}
+
+package() {
+  install -Dm644 "$srcdir/../astroarch-bridge.service" \
+    "$pkgdir/usr/lib/systemd/system/astroarch-bridge.service"
+  # Python package
+  cp -r "$srcdir/_build/"* "$pkgdir/usr/lib/python3/dist-packages/" 2>/dev/null || \
+    cp -r "$srcdir/_build/"* "$pkgdir/usr/lib/python3.12/site-packages/" || true
+  # Entry script
+  install -Dm755 /dev/stdin "$pkgdir/usr/bin/astroarch-bridge" <<'EOF'
+#!/usr/bin/env bash
+exec python3 -m astroarch_bridge "$@"
+EOF
+}

@@ -1,0 +1,18 @@
+[project]
+name = "astroarch-bridge"
+version = "0.1.0"
+description = "Bridge daemon per Astroarch Interface (Android app) - clone live di INDI/Ekos/PHD2 via REST + WebSocket"
+authors = [{name = "Zarletti-Osservatorio Jupiter"}]
+license = {text = "MIT"}
+requires-python = ">=3.11"
+readme = "README.md"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["astroarch_bridge*"]
+
+[project.scripts]
+astroarch-bridge = "astroarch_bridge.__main__:main"
