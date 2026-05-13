@@ -142,12 +142,82 @@ async def simbad_search(name: str) -> dict:
 # Pre-controlla via pgrep per evitare doppi lanci.
 
 
-def _gui_env() -> dict:
-    """Costruisce l'env per lanciare app GUI sull'utente grafico.
-    Assume DISPLAY=:0 (single-seat RPi, è la norma su AstroArch).
-    XAUTHORITY si trova in ~/.Xauthority dell'utente con UID 1000."""
+def _user_graphical_env() -> dict | None:
+    """Trova l'env (DISPLAY, XAUTHORITY, WAYLAND_DISPLAY, …) dell'utente
+    UID 1000 loggato graficamente, leggendolo da un processo desktop
+    del compositor (plasmashell / kwin / xfwm4 / gnome-shell / mutter).
+
+    Ritorna None se l'utente non ha una sessione grafica attiva — in
+    quel caso non possiamo lanciare KStars/PHD2 da remoto.
+
+    Più robusto del precedente "assumi DISPLAY=:0" + XAUTHORITY di
+    ~/.Xauthority: quei valori spesso non funzionano perché:
+      • SDDM usa un xauth proprio in /var/run/sddm/
+      • Wayland non usa DISPLAY classico
+      • Multi-seat o login skipped può cambiare il :N
+    """
     import os
     import pwd
+    try:
+        uid = pwd.getpwnam("astronaut").pw_uid
+    except KeyError:
+        uid = 1000
+    # Processi che indicano sessione grafica attiva di un utente
+    candidates = ("plasmashell", "kwin_x11", "kwin_wayland", "kwin",
+                  "gnome-shell", "mutter", "xfwm4", "xfce4-session",
+                  "lxqt-session", "openbox", "marco")
+    import subprocess
+    for name in candidates:
+        try:
+            r = subprocess.run(
+                ["pgrep", "-u", str(uid), "-x", name],
+                capture_output=True, text=True, timeout=2.0)
+        except Exception:
+            continue
+        pids = [p for p in r.stdout.strip().splitlines() if p]
+        for pid in pids:
+            env_path = f"/proc/{pid}/environ"
+            if not os.path.exists(env_path):
+                continue
+            try:
+                with open(env_path, "rb") as f:
+                    raw = f.read()
+            except PermissionError:
+                # leggere /proc/PID/environ di un altro utente richiede
+                # privilegi (di solito siamo già nello stesso utente del
+                # service systemd-user, ma se siamo systemd-system può
+                # fallire). Ritorniamo None per fallback esplicito.
+                continue
+            env: dict = {}
+            for entry in raw.split(b"\x00"):
+                if not entry or b"=" not in entry:
+                    continue
+                k, _, v = entry.partition(b"=")
+                env[k.decode("utf-8", "replace")] = v.decode("utf-8", "replace")
+            # Verifica che abbia DISPLAY o WAYLAND_DISPLAY
+            if env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"):
+                return env
+    return None
+
+
+def _gui_env() -> dict:
+    """Costruisce l'env per lanciare GUI su display dell'utente loggato.
+    Prima tenta lettura da processo desktop reale (robusto); fallback a
+    DISPLAY=:0 + ~/.Xauthority se nessuna sessione grafica trovata."""
+    import os
+    import pwd
+    detected = _user_graphical_env()
+    if detected is not None:
+        # Parto dal mio env (PATH, ecc.) e sovrascrivo con quello reale
+        env = os.environ.copy()
+        for k in ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "HOME",
+                  "USER", "LOGNAME", "XDG_RUNTIME_DIR",
+                  "XDG_SESSION_TYPE", "DBUS_SESSION_BUS_ADDRESS",
+                  "QT_QPA_PLATFORM", "GDK_BACKEND"):
+            if k in detected:
+                env[k] = detected[k]
+        return env
+    # Fallback (sessione grafica non trovata)
     env = os.environ.copy()
     env["DISPLAY"] = ":0"
     try:
@@ -197,21 +267,59 @@ async def _pkill(*names: str) -> int:
 
 
 async def _launch_detached(binary: str, *args: str) -> bool:
-    """Spawn binary come daemon detached, return immediato. True se
-    il binario esiste."""
-    import asyncio
+    """Spawn binary come daemon detached del display utente. True se
+    il binario esiste.
+
+    `start_new_session=True` di Python chiama `setsid()` nel child PRIMA
+    dell'exec → il processo è in una nuova sessione, non più legato al
+    parent (bridge service). Sopravvive al return della HTTP request.
+    Niente wrapper `setsid` esterno (causava env mangling intermittente
+    su alcuni RPi).
+
+    Usiamo Popen di subprocess (non asyncio.create_subprocess_exec):
+    quest'ultimo crea un pipe per il child anche con DEVNULL, e quel
+    pipe lega il processo al parent loop. Popen + close_fds=True è
+    pulito.
+    """
+    import os
     import shutil
-    if shutil.which(binary) is None:
+    import subprocess
+    bin_path = shutil.which(binary)
+    if bin_path is None:
         return False
-    # nohup + setsid → il processo sopravvive al return della HTTP request
-    await asyncio.create_subprocess_exec(
-        "setsid", "-f", binary, *args,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
+    # fork+exec puro, niente parent watcher
+    subprocess.Popen(
+        [bin_path, *args],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         env=_gui_env(),
         start_new_session=True,
+        close_fds=True,
+        cwd=os.path.expanduser("~"),
     )
     return True
+
+
+@router.get("/gui_session_info")
+async def gui_session_info() -> dict:
+    """Diagnostica: dice se c'è una sessione grafica utente rilevata,
+    e quali DISPLAY/WAYLAND_DISPLAY/XAUTHORITY userà il bridge per
+    lanciare KStars/PHD2.
+    Utile quando launch_kstars fallisce con "could not connect to display"."""
+    env = _user_graphical_env()
+    return {
+        "graphical_session_detected": env is not None,
+        "display": env.get("DISPLAY") if env else None,
+        "wayland_display": env.get("WAYLAND_DISPLAY") if env else None,
+        "xauthority": env.get("XAUTHORITY") if env else None,
+        "session_type": env.get("XDG_SESSION_TYPE") if env else None,
+        "xdg_runtime_dir": env.get("XDG_RUNTIME_DIR") if env else None,
+        "hint": None if env is not None
+            else "Loggati graficamente sul desktop del Raspberry "
+                 "(SDDM/login screen) prima di poter avviare KStars/PHD2 "
+                 "dall'app.",
+    }
 
 
 @router.get("/gui_apps_state")

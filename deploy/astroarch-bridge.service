@@ -20,7 +20,11 @@ NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=read-only
 ReadWritePaths=/home/astroarch/.config/astroarch-bridge /home/astroarch/Pictures/Ekos
-PrivateTmp=true
+# IMPORTANTE: NIENTE PrivateTmp=true. Il bridge deve poter leggere
+# l'xauth file dell'utente loggato graficamente (es. /tmp/xauth_XXXXXX
+# creato da sddm) per spawnare KStars/PHD2 sul suo display. Con
+# PrivateTmp=true il servizio vede un /tmp isolato e i file xauth
+# diventano invisibili → "could not connect to display :0".
 LockPersonality=true
 RestrictRealtime=true
 
