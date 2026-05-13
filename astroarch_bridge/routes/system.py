@@ -133,6 +133,105 @@ async def simbad_search(name: str) -> dict:
 
 
 # ============================================================================
+# LAUNCH GUI APPS (KStars/Ekos + PHD2) — appaiono sul monitor del RPi
+# ============================================================================
+#
+# Lancia i binari come subprocess con DISPLAY/XAUTHORITY dell'utente
+# loggato graficamente. La finestra appare sul monitor del RPi (non
+# sul telefono — è il modo per "avviare il programma" da remoto).
+# Pre-controlla via pgrep per evitare doppi lanci.
+
+
+def _gui_env() -> dict:
+    """Costruisce l'env per lanciare app GUI sull'utente grafico.
+    Assume DISPLAY=:0 (single-seat RPi, è la norma su AstroArch).
+    XAUTHORITY si trova in ~/.Xauthority dell'utente con UID 1000."""
+    import os
+    import pwd
+    env = os.environ.copy()
+    env["DISPLAY"] = ":0"
+    try:
+        u = pwd.getpwuid(1000)
+        env["XAUTHORITY"] = os.path.join(u.pw_dir, ".Xauthority")
+        env["HOME"] = u.pw_dir
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{u.pw_uid}"
+        env.setdefault("DBUS_SESSION_BUS_ADDRESS",
+                       f"unix:path=/run/user/{u.pw_uid}/bus")
+    except KeyError:
+        pass
+    return env
+
+
+async def _pgrep(name: str) -> bool:
+    """True se almeno un processo col nome `name` è in esecuzione."""
+    import asyncio
+    proc = await asyncio.create_subprocess_exec(
+        "pgrep", "-x", name,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    return await proc.wait() == 0
+
+
+async def _launch_detached(binary: str, *args: str) -> bool:
+    """Spawn binary come daemon detached, return immediato. True se
+    il binario esiste."""
+    import asyncio
+    import shutil
+    if shutil.which(binary) is None:
+        return False
+    # nohup + setsid → il processo sopravvive al return della HTTP request
+    await asyncio.create_subprocess_exec(
+        "setsid", "-f", binary, *args,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        env=_gui_env(),
+        start_new_session=True,
+    )
+    return True
+
+
+@router.get("/gui_apps_state")
+async def gui_apps_state() -> dict:
+    """Stato live di KStars e PHD2 (in esecuzione o no)."""
+    return {
+        "kstars_running": await _pgrep("kstars"),
+        "phd2_running":   await _pgrep("phd2"),
+    }
+
+
+@router.post("/launch_kstars")
+async def launch_kstars() -> dict:
+    """Avvia KStars sul desktop del RPi (DISPLAY=:0).
+    Se già in esecuzione, no-op."""
+    import logging as _log
+    _logger = _log.getLogger("astroarch_bridge.system")
+    if await _pgrep("kstars"):
+        return {"ok": True, "started": False, "already_running": True}
+    ok = await _launch_detached("kstars")
+    if not ok:
+        raise HTTPException(status_code=503,
+            detail="kstars binary not found in PATH")
+    _logger.info("kstars launched via DISPLAY=:0")
+    return {"ok": True, "started": True, "already_running": False}
+
+
+@router.post("/launch_phd2")
+async def launch_phd2() -> dict:
+    """Avvia PHD2 sul desktop del RPi. Se già in esecuzione, no-op."""
+    import logging as _log
+    _logger = _log.getLogger("astroarch_bridge.system")
+    if await _pgrep("phd2"):
+        return {"ok": True, "started": False, "already_running": True}
+    ok = await _launch_detached("phd2")
+    if not ok:
+        raise HTTPException(status_code=503,
+            detail="phd2 binary not found in PATH")
+    _logger.info("phd2 launched via DISPLAY=:0")
+    return {"ok": True, "started": True, "already_running": False}
+
+
+# ============================================================================
 # EKOS MASTER CONTROL (clone del quadratino "Start/Stop Ekos" in Setup)
 # ============================================================================
 #
