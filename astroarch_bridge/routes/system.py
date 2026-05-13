@@ -162,15 +162,38 @@ def _gui_env() -> dict:
     return env
 
 
-async def _pgrep(name: str) -> bool:
-    """True se almeno un processo col nome `name` è in esecuzione."""
+async def _pgrep_any(*names: str) -> bool:
+    """True se almeno uno dei nomi processo passati è in esecuzione.
+    Cerca match esatto (-x). Utile per distinguere wrapper script da
+    binari reali: es. PHD2 su AstroArch ha il wrapper `phd2` (che potrebbe
+    non essere running) e il binario `/usr/bin/phd2.bin` (quello vero).
+    """
     import asyncio
-    proc = await asyncio.create_subprocess_exec(
-        "pgrep", "-x", name,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    return await proc.wait() == 0
+    for n in names:
+        proc = await asyncio.create_subprocess_exec(
+            "pgrep", "-x", n,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        if await proc.wait() == 0:
+            return True
+    return False
+
+
+async def _pkill(*names: str) -> int:
+    """Termina tutti i processi che matchano uno dei nomi (esatto, -x).
+    Usa SIGTERM (graceful). Ritorna il numero di processi terminati."""
+    import asyncio
+    killed = 0
+    for n in names:
+        proc = await asyncio.create_subprocess_exec(
+            "pkill", "-x", n,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        if await proc.wait() == 0:
+            killed += 1
+    return killed
 
 
 async def _launch_detached(binary: str, *args: str) -> bool:
@@ -193,10 +216,12 @@ async def _launch_detached(binary: str, *args: str) -> bool:
 
 @router.get("/gui_apps_state")
 async def gui_apps_state() -> dict:
-    """Stato live di KStars e PHD2 (in esecuzione o no)."""
+    """Stato live di KStars e PHD2 (in esecuzione o no).
+    PHD2 su AstroArch è un wrapper script che lancia /usr/bin/phd2.bin
+    → cerchiamo entrambi i nomi processo per essere robusti."""
     return {
-        "kstars_running": await _pgrep("kstars"),
-        "phd2_running":   await _pgrep("phd2"),
+        "kstars_running": await _pgrep_any("kstars", "kstars.bin"),
+        "phd2_running":   await _pgrep_any("phd2", "phd2.bin"),
     }
 
 
@@ -206,7 +231,7 @@ async def launch_kstars() -> dict:
     Se già in esecuzione, no-op."""
     import logging as _log
     _logger = _log.getLogger("astroarch_bridge.system")
-    if await _pgrep("kstars"):
+    if await _pgrep_any("kstars", "kstars.bin"):
         return {"ok": True, "started": False, "already_running": True}
     ok = await _launch_detached("kstars")
     if not ok:
@@ -221,7 +246,7 @@ async def launch_phd2() -> dict:
     """Avvia PHD2 sul desktop del RPi. Se già in esecuzione, no-op."""
     import logging as _log
     _logger = _log.getLogger("astroarch_bridge.system")
-    if await _pgrep("phd2"):
+    if await _pgrep_any("phd2", "phd2.bin"):
         return {"ok": True, "started": False, "already_running": True}
     ok = await _launch_detached("phd2")
     if not ok:
@@ -229,6 +254,28 @@ async def launch_phd2() -> dict:
             detail="phd2 binary not found in PATH")
     _logger.info("phd2 launched via DISPLAY=:0")
     return {"ok": True, "started": True, "already_running": False}
+
+
+@router.post("/kill_kstars")
+async def kill_kstars() -> dict:
+    """Termina KStars/Ekos (SIGTERM graceful).
+    L'app lo chiama solo quando il sistema Ekos è DISATTIVATO, così
+    l'utente non chiude per sbaglio una sessione attiva di osservazione."""
+    import logging as _log
+    _logger = _log.getLogger("astroarch_bridge.system")
+    n = await _pkill("kstars", "kstars.bin")
+    _logger.info("kill_kstars: terminated %d processes", n)
+    return {"ok": True, "killed": n}
+
+
+@router.post("/kill_phd2")
+async def kill_phd2() -> dict:
+    """Termina PHD2 (SIGTERM graceful)."""
+    import logging as _log
+    _logger = _log.getLogger("astroarch_bridge.system")
+    n = await _pkill("phd2", "phd2.bin")
+    _logger.info("kill_phd2: terminated %d processes", n)
+    return {"ok": True, "killed": n}
 
 
 # ============================================================================
