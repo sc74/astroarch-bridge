@@ -233,36 +233,57 @@ def _gui_env() -> dict:
 
 
 async def _pgrep_any(*names: str) -> bool:
-    """True se almeno uno dei nomi processo passati è in esecuzione.
-    Cerca match esatto (-x). Utile per distinguere wrapper script da
-    binari reali: es. PHD2 su AstroArch ha il wrapper `phd2` (che potrebbe
-    non essere running) e il binario `/usr/bin/phd2.bin` (quello vero).
+    """True se almeno uno dei nomi processo passati è in esecuzione
+    (esclude zombies — defunct dopo kill non li conta come running).
+
+    Cerca match esatto sul nome. Su AstroArch PHD2 può essere `phd2`
+    (wrapper) o `phd2.bin` (binario reale); KStars `kstars`. Le
+    rispettive entry zombie sono escluse esplicitamente.
     """
     import asyncio
     for n in names:
+        # ps -C <name> -o pid=,state=  → uno per riga; escludo state=Z
         proc = await asyncio.create_subprocess_exec(
-            "pgrep", "-x", n,
-            stdout=asyncio.subprocess.DEVNULL,
+            "ps", "-C", n, "-o", "pid=,state=",
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        if await proc.wait() == 0:
-            return True
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            continue
+        for line in stdout.decode("utf-8", "replace").splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and "Z" not in parts[1]:
+                return True
     return False
 
 
 async def _pkill(*names: str) -> int:
-    """Termina tutti i processi che matchano uno dei nomi (esatto, -x).
-    Usa SIGTERM (graceful). Ritorna il numero di processi terminati."""
+    """Termina TUTTI i processi vivi tra i nomi candidati. Doppio giro:
+    SIGTERM + sleep + SIGKILL ai sopravvissuti. Reaping dei zombie
+    figli con waitpid via wait sul processo pkill stesso. Ritorna il
+    numero di processi terminati nel primo giro (SIGTERM)."""
     import asyncio
+    # 1° giro: SIGTERM a tutti i nomi (sia wrapper `phd2` sia bin `phd2.bin`)
     killed = 0
     for n in names:
         proc = await asyncio.create_subprocess_exec(
-            "pkill", "-x", n,
+            "pkill", "-TERM", "-x", n,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
         if await proc.wait() == 0:
             killed += 1
+    # Attesa graceful shutdown
+    await asyncio.sleep(2.0)
+    # 2° giro: SIGKILL ai sopravvissuti
+    for n in names:
+        proc = await asyncio.create_subprocess_exec(
+            "pkill", "-KILL", "-x", n,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
     return killed
 
 
