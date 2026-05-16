@@ -6,9 +6,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Esegui come utente non privilegiato (creato dall'install script)
-User=astroarch
-Group=astroarch
 ExecStart=/usr/bin/python3 -m astroarch_bridge
 Restart=on-failure
 RestartSec=5
@@ -19,16 +16,17 @@ StandardError=journal
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/home/astroarch/.config/astroarch-bridge /home/astroarch/Pictures/Ekos
-# IMPORTANTE: NIENTE PrivateTmp=true. Il bridge deve poter leggere
-# l'xauth file dell'utente loggato graficamente (es. /tmp/xauth_XXXXXX
-# creato da sddm) per spawnare KStars/PHD2 sul suo display. Con
-# PrivateTmp=true il servizio vede un /tmp isolato e i file xauth
-# diventano invisibili → "could not connect to display :0".
+ReadWritePaths=%h/.config/astroarch-bridge %h/Pictures/Ekos
+
+# IMPORTANT: NOTHING PrivateTmp=true. The bridge must be able to read
+# the xauth file of the user logged in graphically (e.g., /tmp/xauth_XXXXXX
+# created by sddm) to spawn KStars/PHD2 on its display. With
+# PrivateTmp=true, the service sees an isolated /tmp and the xauth files
+# become invisible → "could not connect to display :0".
 LockPersonality=true
 RestrictRealtime=true
 
-# Environment overrides (opzionale - decommentare per personalizzare)
+# Environment overrides (optional - uncomment to customize)
 # Environment=ASTROARCH_PORT=8765
 # Environment=ASTROARCH_INDI_HOST=127.0.0.1
 # Environment=ASTROARCH_INDI_PORT=7624
@@ -37,4 +35,4 @@ RestrictRealtime=true
 # Environment=ASTROARCH_LOG_LEVEL=INFO
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

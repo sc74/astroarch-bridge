@@ -1,10 +1,10 @@
 [project]
 name = "astroarch-bridge"
-version = "0.3.0"
-description = "Bridge daemon for Astroarch Interface (Android app) - live clone di INDI/Ekos/PHD2 via REST + WebSocket"
+version = "0.3.1"
+description = "Bridge daemon for Astroarch Interface (Android app) - live clone of INDI/Ekos/PHD2 via REST + WebSocket"
 authors = [{name = "Zarletti-Osservatorio Jupiter"}]
 license = {text = "MIT"}
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.13"
 readme = "README.md"
 dependencies = [
     "astropy==6.1.4",
