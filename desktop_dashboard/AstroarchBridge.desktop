@@ -1,10 +1,11 @@
+#!/usr/bin/env xdg-open
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=Astroarch Bridge
-Comment=Dashboard backend per app mobile (Zarletti-Osservatorio Jupiter)
-Exec=/usr/bin/python /home/astronaut/astroarch-bridge-dashboard/astroarch_bridge_dashboard.py
-Icon=/home/astronaut/astroarch-bridge-dashboard/astroarch_bridge.png
+Comment=Backend dashboard for mobile apps (Zarletti-Osservatorio Jupiter)
+Exec=/usr/bin/python3 /usr/share/astroarch-bridge/desktop_dashboard/astroarch_bridge_dashboard.py
+Icon=/usr/share/astroarch-bridge/desktop_dashboard/astroarch_bridge.png
 Terminal=false
 Categories=Science;Astronomy;Utility;
 StartupNotify=true
