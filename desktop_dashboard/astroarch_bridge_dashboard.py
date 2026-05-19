@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Dashboard tkinter per astroarch-bridge.
+"""Tkinter dashboard for astroarch-bridge.
 
-Mostra:
-- Stato servizio systemd user (running / stopped / failed)
-- Connessione INDI / PHD2 (dal bridge)
-- Numero device, properties, clients WS
-- Token + URL (con copy)
-- Bottoni: Start / Stop / Restart / Reload / Apri log
+Shows:
+- systemd user service status (running / stopped / failed)
+- INDI / PHD2 connection (from the bridge)
+- Device count, properties, WS clients
+- Token + URL (with copy)
+- Buttons: Start / Stop / Restart / Reload / Open log
 
-Si avvia automaticamente quando l'utente apre la sessione (autostart .desktop)
-oppure cliccando l'icona sul desktop.
+Starts automatically when the user opens the session (autostart .desktop)
+or by clicking the icon on the desktop.
 """
 from __future__ import annotations
 
@@ -33,9 +33,96 @@ except ImportError:
     _HAS_QR = False
 
 SERVICE = "astroarch-bridge.service"
-DEFAULT_URL = "http://127.0.0.1:8765"
 TOKEN_FILE = Path.home() / ".config" / "astroarch-bridge" / "token"
 REFRESH_MS = 2000
+
+# Hotspot IP defined by AstroArch (create_ap.sh / NetworkManager shared mode)
+HOTSPOT_IP = "10.42.0.1"
+# Default port if the systemd override is not readable
+DEFAULT_PORT = 8765
+
+
+def _read_service_port() -> int:
+    """Reads ASTROARCH_PORT from the current user's systemd drop-in.
+
+    Path: ~/.config/systemd/user/astroarch-bridge.service.d/override.conf
+    Expected line: Environment=ASTROARCH_PORT=XXXX
+    Returns DEFAULT_PORT if the file is missing or malformed.
+    """
+    override = (
+        Path.home()
+        / ".config"
+        / "systemd"
+        / "user"
+        / "astroarch-bridge.service.d"
+        / "override.conf"
+    )
+    if override.exists():
+        for line in override.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("Environment=ASTROARCH_PORT="):
+                try:
+                    return int(line.split("=", 2)[2])
+                except (IndexError, ValueError):
+                    pass
+    # Fallback: environment variable (useful during development)
+    try:
+        return int(os.environ.get("ASTROARCH_PORT", DEFAULT_PORT))
+    except ValueError:
+        return DEFAULT_PORT
+
+
+def _best_ip() -> str:
+    """Determines the best IP to expose in the dashboard.
+
+    Priority:
+    1. Active WiFi hotspot (10.42.0.1 assigned to wlan0 by NetworkManager)
+    2. Primary IP of wlan0 if connected to a modem/router
+    3. Primary IP of eth0 / other physical interface
+    4. Fallback 127.0.0.1
+    """
+    # 1. Check if the AstroArch hotspot is active (NM connection type=wifi mode=ap)
+    try:
+        r = subprocess.run(
+            ["nmcli", "-t", "-f", "NAME,DEVICE,STATE", "connection", "show", "--active"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                # line format: name:device:state
+                parts = line.split(":")
+                if len(parts) >= 3 and parts[1] == "wlan0" and parts[2] == "activated":
+                    # Verify it is the hotspot (ap mode)
+                    r2 = subprocess.run(
+                        ["nmcli", "-t", "-f", "802-11-wireless.mode",
+                         "connection", "show", parts[0]],
+                        capture_output=True, text=True, timeout=3,
+                    )
+                    if r2.returncode == 0 and "ap" in r2.stdout.lower():
+                        return HOTSPOT_IP
+    except Exception:
+        pass
+
+    # 2 & 3. Look for IP on wlan0, then on any physical interface
+    for iface in ("wlan0", "eth0", ""):
+        try:
+            cmd = ["ip", "-4", "-o", "addr", "show"]
+            if iface:
+                cmd += ["dev", iface]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                # parts[1] = interface, parts[3] = addr/prefix
+                if len(parts) >= 4:
+                    ip = parts[3].split("/")[0]
+                    if ip.startswith("127.") or ip.startswith("169.254."):
+                        continue
+                    return ip
+        except Exception:
+            pass
+
+    return "127.0.0.1"
+
 
 # Palette
 BG = "#0a0d12"
@@ -145,7 +232,7 @@ class App:
         cell(info, "WS FRAMES", self.frames_var, 5)
 
         # URL + token
-        access = tk.LabelFrame(outer, text=" Accesso app ", bg=BG, fg=MUTED,
+        access = tk.LabelFrame(outer, text=" App access ", bg=BG, fg=MUTED,
                                font=small_font, bd=1, relief="solid",
                                labelanchor="nw", padx=10, pady=8)
         access.configure(highlightbackground=LINE)
@@ -159,6 +246,9 @@ class App:
         tk.Entry(urlrow, textvariable=self.url_var, bg=PANEL2, fg=TEXT,
                  font=mono_font, relief="flat", insertbackground=TEXT,
                  readonlybackground=PANEL2, state="readonly").pack(side="left", fill="x", expand=True)
+        tk.Button(urlrow, text="↺", command=self._refresh_url, bg=PANEL2, fg=ACCENT2,
+                  font=small_font, relief="flat", padx=8,
+                  cursor="hand2").pack(side="left", padx=(4, 0))
 
         tokrow = tk.Frame(access, bg=BG)
         tokrow.pack(fill="x", pady=2)
@@ -168,11 +258,11 @@ class App:
         tk.Entry(tokrow, textvariable=self.token_var, bg=PANEL2, fg=TEXT,
                  font=mono_font, relief="flat", insertbackground=TEXT,
                  readonlybackground=PANEL2, state="readonly").pack(side="left", fill="x", expand=True)
-        tk.Button(tokrow, text="Copia", command=self._copy_token, bg=ACCENT2, fg="black",
+        tk.Button(tokrow, text="Copy", command=self._copy_token, bg=ACCENT2, fg="black",
                   font=small_font, relief="flat", padx=10).pack(side="left", padx=(6, 0))
 
-        # QR code per app mobile
-        qrwrap = tk.LabelFrame(outer, text=" QR CODE per app mobile ", bg=BG, fg=MUTED,
+        # QR code for mobile app
+        qrwrap = tk.LabelFrame(outer, text=" QR CODE for mobile app ", bg=BG, fg=MUTED,
                                font=small_font, bd=1, relief="solid",
                                labelanchor="nw", padx=10, pady=8)
         qrwrap.pack(fill="x", pady=(10, 0))
@@ -182,35 +272,35 @@ class App:
         self.qr_canvas.pack(side="left", padx=(0, 12))
         qrinfo = tk.Frame(qrrow, bg=BG)
         qrinfo.pack(side="left", fill="both", expand=True)
-        tk.Label(qrinfo, text="Apri l'app Astroarch Interface,",
+        tk.Label(qrinfo, text="Open the Astroarch Interface app,",
                  bg=BG, fg=TEXT, font=body_font, anchor="w", justify="left")\
             .pack(fill="x", anchor="w")
-        tk.Label(qrinfo, text="tappa il pulsante 📷 SCAN QR sulla",
+        tk.Label(qrinfo, text="tap the 📷 SCAN QR button on the",
                  bg=BG, fg=TEXT, font=body_font, anchor="w", justify="left")\
             .pack(fill="x", anchor="w")
-        tk.Label(qrinfo, text="schermata Login.",
+        tk.Label(qrinfo, text="Login screen.",
                  bg=BG, fg=TEXT, font=body_font, anchor="w", justify="left")\
             .pack(fill="x", anchor="w")
-        tk.Label(qrinfo, text="Host, porta e token verranno",
+        tk.Label(qrinfo, text="Host, port and token will be",
                  bg=BG, fg=MUTED, font=small_font, anchor="w", justify="left")\
             .pack(fill="x", anchor="w", pady=(8, 0))
-        tk.Label(qrinfo, text="popolati automaticamente.",
+        tk.Label(qrinfo, text="filled in automatically.",
                  bg=BG, fg=MUTED, font=small_font, anchor="w", justify="left")\
             .pack(fill="x", anchor="w")
         self.qr_status_var = tk.StringVar(value="")
         tk.Label(qrinfo, textvariable=self.qr_status_var, bg=BG, fg=ACCENT2,
                  font=small_font, anchor="w", justify="left")\
             .pack(fill="x", anchor="w", pady=(8, 0))
-        self._qr_image_ref = None  # tieni reference per non far GC
+        self._qr_image_ref = None  # keep reference to prevent GC
         self._render_qr()
 
-        # Buttons - "Connetti/Disconnetti" agiscono sul servizio systemd:
-        # quando il servizio gira, l'app mobile può connettersi.
+        # Buttons - "Connect/Disconnect" act on the systemd service:
+        # when the service is running, the mobile app can connect.
         btns = tk.Frame(outer, bg=BG)
         btns.pack(fill="x", pady=(14, 0))
-        self._btn(btns, "▶ CONNETTI", OK, self.start, 0)
-        self._btn(btns, "■ DISCONNETTI", ERR, self.stop, 1)
-        self._btn(btns, "↻ Riavvia", ACCENT, self.restart, 2)
+        self._btn(btns, "▶ CONNECT", OK, self.start, 0)
+        self._btn(btns, "■ DISCONNECT", ERR, self.stop, 1)
+        self._btn(btns, "↻ Restart", ACCENT, self.restart, 2)
         self._btn(btns, "≡ Log", PANEL2, self.show_log, 3)
         for i in range(4):
             btns.columnconfigure(i, weight=1)
@@ -218,7 +308,7 @@ class App:
         # Log preview
         logbar = tk.Frame(outer, bg=BG)
         logbar.pack(fill="x", pady=(10, 4))
-        tk.Label(logbar, text="ULTIME RIGHE LOG", bg=BG, fg=MUTED, font=small_font).pack(side="left")
+        tk.Label(logbar, text="LATEST LOG LINES", bg=BG, fg=MUTED, font=small_font).pack(side="left")
         self.log_box = tk.Text(outer, bg="#05080e", fg=MUTED, font=mono_font,
                                height=8, relief="flat", borderwidth=1,
                                highlightbackground=LINE, highlightthickness=1)
@@ -247,21 +337,25 @@ class App:
         return b
 
     def _auto_url(self) -> str:
-        # Tenta di leggere ip Tailscale: tailscale ip -4
-        try:
-            r = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=2)
-            ip = r.stdout.strip().splitlines()[0] if r.returncode == 0 else "127.0.0.1"
-        except Exception:
-            ip = "127.0.0.1"
-        return f"http://{ip}:8765"
+        """Builds the connection URL: detected network IP + service port."""
+        ip = _best_ip()
+        port = _read_service_port()
+        return f"http://{ip}:{port}"
+
+    def _refresh_url(self):
+        """Refreshes the URL (called by the ↺ button and the network tick)."""
+        new_url = self._auto_url()
+        self.url_var.set(new_url)
+        self._render_qr()
+        self.footer_var.set(f"URL updated → {new_url}")
 
     # --- Actions ---
     def start(self):
         threading.Thread(target=self._svc_action, args=("start",), daemon=True).start()
 
     def stop(self):
-        if not messagebox.askyesno("Conferma",
-                                   "Fermare il bridge? L'app mobile perderà la connessione."):
+        if not messagebox.askyesno("Confirm",
+                                   "Stop the bridge? The mobile app will lose the connection."):
             return
         threading.Thread(target=self._svc_action, args=("stop",), daemon=True).start()
 
@@ -269,7 +363,7 @@ class App:
         threading.Thread(target=self._svc_action, args=("restart",), daemon=True).start()
 
     def show_log(self):
-        # apri log live in terminale (xterm/gnome-terminal/konsole)
+        # Open live log in terminal (xterm/gnome-terminal/konsole)
         for term in (("konsole", "-e"), ("gnome-terminal", "--"), ("xterm", "-e")):
             try:
                 subprocess.Popen([*term, "journalctl", "--user", "-u", SERVICE, "-f"])
@@ -277,7 +371,7 @@ class App:
             except FileNotFoundError:
                 continue
         messagebox.showwarning("Log",
-            "Nessun terminale trovato. Apri manualmente:\n  journalctl --user -u astroarch-bridge -f")
+            "No terminal found. Open manually:\n  journalctl --user -u astroarch-bridge -f")
 
     def _svc_action(self, action: str):
         try:
@@ -286,7 +380,7 @@ class App:
                 f"systemctl {action}: rc={res.returncode} "
                 + (res.stderr.strip()[:80] if res.returncode else "ok"))
         except Exception as e:
-            self.footer_var.set(f"errore: {e}")
+            self.footer_var.set(f"error: {e}")
 
     def _copy_token(self):
         tok = self.token_var.get()
@@ -294,20 +388,20 @@ class App:
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(tok)
-        self.footer_var.set("Token copiato negli appunti")
+        self.footer_var.set("Token copied to clipboard")
 
     # --- QR code ---
     def _qr_payload(self) -> str:
-        """Payload JSON che l'app legge per autoconfigurarsi."""
-        url = self.url_var.get() or DEFAULT_URL
-        # Estrai host:porta dall'URL
+        """JSON payload that the app reads to self-configure."""
+        url = self.url_var.get() or self._auto_url()
+        # Extract host:port from the URL
         try:
             from urllib.parse import urlparse
             u = urlparse(url)
             host = u.hostname or "127.0.0.1"
-            port = u.port or 8765
+            port = u.port or _read_service_port()
         except Exception:
-            host, port = "127.0.0.1", 8765
+            host, port = "127.0.0.1", _read_service_port()
         return json.dumps({
             "v": 1,
             "type": "astroarch-bridge",
@@ -318,7 +412,7 @@ class App:
 
     def _render_qr(self):
         if not _HAS_QR:
-            self.qr_canvas.configure(text="qrcode lib\nnon installata",
+            self.qr_canvas.configure(text="qrcode lib\nnot installed",
                                      fg=ERR, bg=PANEL, width=24, height=12)
             return
         try:
@@ -328,14 +422,14 @@ class App:
             qr.add_data(self._qr_payload())
             qr.make(fit=True)
             img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-            # Rendering a PhotoImage (tkinter)
+            # Render as PhotoImage (tkinter)
             buf = io.BytesIO()
             img.save(buf, format="PNG")
             buf.seek(0)
             from tkinter import PhotoImage
             self._qr_image_ref = PhotoImage(data=buf.getvalue())
             self.qr_canvas.configure(image=self._qr_image_ref, width=200, height=200, text="")
-            self.qr_status_var.set(f"QR aggiornato · {len(self._qr_payload())} byte")
+            self.qr_status_var.set(f"QR updated · {len(self._qr_payload())} bytes")
         except Exception as e:
             self.qr_canvas.configure(text=f"QR error: {e}", bg=PANEL, fg=ERR)
             self.qr_status_var.set("")
@@ -349,12 +443,15 @@ class App:
 
     def _refresh_async(self):
         st = service_status()
+        # Refresh IP/port at each tick (changes if hotspot is enabled/disabled)
+        new_url = self._auto_url()
+        self.root.after(0, lambda u=new_url: self._maybe_update_url(u))
         self.root.after(0, lambda: self._update_status(st))
         if st == "active":
-            url = self.url_var.get() or DEFAULT_URL
+            url = self.url_var.get() or self._auto_url()
             tok = self.token_var.get() or read_token()
             if tok:
-                conn = http_json(f"{url.replace('http://', 'http://').rstrip('/')}/api/system/connections", tok)
+                conn = http_json(f"{url.rstrip('/')}/api/system/connections", tok)
                 snap = http_json(f"{url.rstrip('/')}/api/system/snapshot", tok, timeout=4.0)
                 if conn or snap:
                     self.root.after(0, lambda: self._update_state(conn, snap))
@@ -371,11 +468,17 @@ class App:
         except Exception as e:
             return f"(log error: {e})"
 
+    def _maybe_update_url(self, new_url: str):
+        """Updates the URL and QR only if the IP/port has changed."""
+        if self.url_var.get() != new_url:
+            self.url_var.set(new_url)
+            self._render_qr()
+
     def _update_status(self, st: str):
         color = {"active": OK, "activating": WARN, "reloading": WARN,
                  "inactive": MUTED, "failed": ERR}.get(st, MUTED)
-        labels = {"active": "Servizio attivo", "inactive": "Servizio fermato",
-                  "failed": "Servizio in errore", "activating": "Avvio in corso…"}
+        labels = {"active": "Service active", "inactive": "Service stopped",
+                  "failed": "Service error", "activating": "Starting…"}
         self.status_dot_canvas.itemconfig(self.status_dot, fill=color)
         self.status_text.configure(text=labels.get(st, st), fg=color)
 
@@ -386,7 +489,7 @@ class App:
         if snap:
             self.dev_var.set(str(len(snap.get("devices", []))))
             self.props_var.set(str(len(snap.get("properties", []))))
-        # WS clients (snapshot non li espone, lasciamo placeholder)
+        # WS clients (snapshot does not expose them, leaving placeholder)
         self.ws_var.set("hub ok")
         self.frames_var.set("hub ok")
 
@@ -404,7 +507,7 @@ class App:
 
 def main():
     root = tk.Tk()
-    # Imposta tema scuro per ttk widgets
+    # Set dark theme for ttk widgets
     style = ttk.Style(root)
     try:
         style.theme_use("clam")

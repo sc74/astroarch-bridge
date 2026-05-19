@@ -1,42 +1,42 @@
 # Maintainer: Zarletti-Osservatorio Jupiter
 pkgname=astroarch-bridge
-pkgver=0.1.0
+pkgver=0.3.1
 pkgrel=1
 pkgdesc="Backend daemon per Astroarch Interface Android app - clone live INDI/Ekos/PHD2"
 arch=('any')
-url="https://github.com/zarletti/astroarch-interface"
+url="https://github.com/Johannes1979I/astroarch-bridge"
 license=('MIT')
 depends=(
-  'python>=3.11'
-  'python-fastapi'
-  'python-uvicorn'
-  'python-pydantic'
-  'python-pydantic-settings'
-  'python-websockets'
-  'python-watchdog'
-  'python-astropy'
-  'python-numpy'
-  'python-pillow'
+    python-astropy
+    python-fastapi
+    python-numpy
+    python-pillow
+    python-pydantic
+    python-pydantic-settings
+    python-watchdog
+    python-websockets
+    uvicorn
 )
-makedepends=('python-setuptools' 'python-pip')
-backup=()
-source=()  # built locally
-sha256sums=()
+makedepends=(python-build
+	     python-installer
+	     python-setuptools)
+optdepends=(
+    'tailscale: remote access and QR pairing with Tailscale IP detection'
+)
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/Johannes1979I/astroarch-bridge/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=(SKIP)
 
 build() {
-  cd "$srcdir/../.."
-  python -m pip install --target="$srcdir/_build" .
+    cd "${srcdir}/${pkgname}-${pkgver}"
+    python -m build --wheel --no-isolation --skip-dependency-check
 }
 
 package() {
-  install -Dm644 "$srcdir/../astroarch-bridge.service" \
-    "$pkgdir/usr/lib/systemd/system/astroarch-bridge.service"
-  # Python package
-  cp -r "$srcdir/_build/"* "$pkgdir/usr/lib/python3/dist-packages/" 2>/dev/null || \
-    cp -r "$srcdir/_build/"* "$pkgdir/usr/lib/python3.12/site-packages/" || true
-  # Entry script
-  install -Dm755 /dev/stdin "$pkgdir/usr/bin/astroarch-bridge" <<'EOF'
-#!/usr/bin/env bash
-exec python3 -m astroarch_bridge "$@"
-EOF
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 "deploy/astroarch-bridge.service" \
+    "$pkgdir/usr/lib/systemd/user/astroarch-bridge.service"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  mkdir -p "$pkgdir/usr/share/${pkgname}/desktop_dashboard"
+  cp -r "$srcdir/desktop_dashboard/." "$pkgdir/usr/share/${pkgname}/desktop_dashboard/"
 }
