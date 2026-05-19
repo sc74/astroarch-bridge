@@ -1,0 +1,192 @@
+# German translations for Astroarch Bridge Dashboard.
+# Copyright (C) 2026 Astroarch
+msgid ""
+msgstr ""
+"Project-Id-Version: astroarch-bridge\n"
+"POT-Creation-Date: 2026-05-20 00:02+0200\n"
+"PO-Revision-Date: 2026-05-20 00:10+0200\n"
+"Last-Translator: \n"
+"Language-Team: German\n"
+"Language: de\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: astroarch_bridge_dashboard.py:197
+msgid "Astroarch Bridge — Dashboard"
+msgstr "Astroarch Bridge — Übersicht"
+
+#: astroarch_bridge_dashboard.py:227
+msgid "Astroarch "
+msgstr "Astroarch "
+
+#: astroarch_bridge_dashboard.py:228
+msgid "Bridge"
+msgstr "Bridge"
+
+#: astroarch_bridge_dashboard.py:229
+msgid "  · Zarletti-Osservatorio Jupiter"
+msgstr "  · Zarletti-Osservatorio Jupiter"
+
+#: astroarch_bridge_dashboard.py:267
+msgid "INDI"
+msgstr "INDI"
+
+#: astroarch_bridge_dashboard.py:268
+msgid "PHD2"
+msgstr "PHD2"
+
+#: astroarch_bridge_dashboard.py:269
+msgid "DEVICES"
+msgstr "GERÄTE"
+
+#: astroarch_bridge_dashboard.py:270
+msgid "PROPERTIES"
+msgstr "EIGENSCHAFTEN"
+
+#: astroarch_bridge_dashboard.py:271
+msgid "WS STATE"
+msgstr "WS-STATUS"
+
+#: astroarch_bridge_dashboard.py:272
+msgid "WS FRAMES"
+msgstr "WS-FRAMES"
+
+#: astroarch_bridge_dashboard.py:275
+msgid " App access "
+msgstr " App-Zugriff "
+
+#: astroarch_bridge_dashboard.py:283
+msgid "URL"
+msgstr "URL"
+
+#: astroarch_bridge_dashboard.py:295
+msgid "Token"
+msgstr "Token"
+
+#: astroarch_bridge_dashboard.py:301
+msgid "Copy"
+msgstr "Kopieren"
+
+#: astroarch_bridge_dashboard.py:305
+msgid " QR CODE for mobile app "
+msgstr " QR-CODE für die mobile App "
+
+#: astroarch_bridge_dashboard.py:315
+msgid "Open the Astroarch Interface app,"
+msgstr "Öffne die Astroarch Interface App,"
+
+#: astroarch_bridge_dashboard.py:318
+msgid "tap the 📷 SCAN QR button on the"
+msgstr "tippe auf den 📷 QR SCANNEN Knopf auf"
+
+#: astroarch_bridge_dashboard.py:321
+msgid "Login screen."
+msgstr "dem Anmeldebildschirm."
+
+#: astroarch_bridge_dashboard.py:324
+msgid "Host, port and token will be"
+msgstr "Host, Port und Token werden"
+
+#: astroarch_bridge_dashboard.py:327
+msgid "filled in automatically."
+msgstr "automatisch ausgefüllt."
+
+#: astroarch_bridge_dashboard.py:340
+msgid "▶ CONNECT"
+msgstr "▶ VERBINDEN"
+
+#: astroarch_bridge_dashboard.py:341
+msgid "■ DISCONNECT"
+msgstr "■ TRENNEN"
+
+#: astroarch_bridge_dashboard.py:342
+msgid "↻ Restart"
+msgstr "↻ Neustart"
+
+#: astroarch_bridge_dashboard.py:343
+msgid "≡ Log"
+msgstr "≡ Protokoll"
+
+#: astroarch_bridge_dashboard.py:350
+msgid "LATEST LOG LINES"
+msgstr "NEUESTE PROTOKOLLZEILEN"
+
+#: astroarch_bridge_dashboard.py:389
+#, python-brace-format
+msgid "URL updated → {}"
+msgstr "URL aktualisiert → {}"
+
+#: astroarch_bridge_dashboard.py:396
+msgid "Confirm"
+msgstr "Bestätigen"
+
+#: astroarch_bridge_dashboard.py:397
+msgid "Stop the bridge? The mobile app will lose the connection."
+msgstr "Bridge stoppen? Die mobile App verliert die Verbindung."
+
+#: astroarch_bridge_dashboard.py:412
+msgid "Log"
+msgstr "Protokoll"
+
+#: astroarch_bridge_dashboard.py:413
+msgid ""
+"No terminal found. Open manually:\n"
+"  journalctl --user -u astroarch-bridge -f"
+msgstr ""
+"Kein Terminal gefunden. Manuell öffnen:\n"
+"  journalctl --user -u astroarch-bridge -f"
+
+#: astroarch_bridge_dashboard.py:419
+#, python-brace-format
+msgid "systemctl {}: rc={} "
+msgstr "systemctl {}: rc={} "
+
+#: astroarch_bridge_dashboard.py:422
+#, python-brace-format
+msgid "error: {}"
+msgstr "Fehler: {}"
+
+#: astroarch_bridge_dashboard.py:430
+msgid "Token copied to clipboard"
+msgstr "Token in die Zwischenablage kopiert"
+
+#: astroarch_bridge_dashboard.py:454
+msgid ""
+"qrcode lib\n"
+"not installed"
+msgstr ""
+"qrcode-Bibliothek\n"
+"nicht installiert"
+
+#: astroarch_bridge_dashboard.py:471
+#, python-brace-format
+msgid "QR updated · {} bytes"
+msgstr "QR aktualisiert · {} Bytes"
+
+#: astroarch_bridge_dashboard.py:473
+#, python-brace-format
+msgid "QR error: {}"
+msgstr "QR-Fehler: {}"
+
+#: astroarch_bridge_dashboard.py:508
+#, python-brace-format
+msgid "(log error: {})"
+msgstr "(Protokollfehler: {})"
+
+#: astroarch_bridge_dashboard.py:519
+msgid "Service active"
+msgstr "Dienst aktiv"
+
+#: astroarch_bridge_dashboard.py:519
+msgid "Service stopped"
+msgstr "Dienst gestoppt"
+
+#: astroarch_bridge_dashboard.py:520
+msgid "Service error"
+msgstr "Dienstfehler"
+
+#: astroarch_bridge_dashboard.py:520
+msgid "Starting…"
+msgstr "Wird gestartet…"
