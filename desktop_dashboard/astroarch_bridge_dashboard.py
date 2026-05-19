@@ -173,6 +173,21 @@ class App:
         root.geometry("520x540")
         root.minsize(480, 480)
 
+        try:
+            root.wm_wmclass("astroarchbridge", "AstroarchBridge")
+        except Exception:
+            pass
+
+        try:
+            icon_path = Path("/usr/share/astroarch-bridge/desktop_dashboard/astroarch_bridge.png")
+
+            if icon_path.exists():
+                self.window_icon = tk.PhotoImage(file=str(icon_path))
+                root.wm_iconphoto(True, self.window_icon)
+        except Exception as e:
+            print(f"Erreur chargement icône : {e}")
+
+
         title_font = tkfont.Font(family="DejaVu Sans", size=15, weight="bold")
         body_font = tkfont.Font(family="DejaVu Sans", size=10)
         mono_font = tkfont.Font(family="DejaVu Sans Mono", size=10)
