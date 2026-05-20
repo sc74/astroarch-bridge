@@ -23,6 +23,8 @@ import tkinter as tk
 import tkinter.font as tkfont
 import urllib.error
 import urllib.request
+import gettext
+import locale
 from pathlib import Path
 from tkinter import messagebox, ttk
 
@@ -31,6 +33,30 @@ try:
     _HAS_QR = True
 except ImportError:
     _HAS_QR = False
+
+# --- TRANSLATION SETTINGS ---
+
+# 1. Initialize and configure standard system environment locales
+try:
+    locale.setlocale(locale.LC_ALL, "")
+except Exception:
+    pass
+
+LOCALE_DIR = Path("/usr/share/astroarch-bridge/desktop_dashboard/locales")
+if not LOCALE_DIR.exists():
+    LOCALE_DIR = Path(__file__).parent / "locales"
+
+# 2. Utilize Object-Oriented gettext API for bulletproof Python thread safety
+try:
+    current_locale, _encoding = locale.getlocale()
+    lang = [current_locale.split('_')[0]] if current_locale else ['it']
+    translation = gettext.translation(
+        domain="base", localedir=str(LOCALE_DIR), languages=lang, fallback=True
+    )
+    _ = translation.gettext
+except Exception as e:
+    print(f"Translation engine initialization failed, using runtime fallback: {e}")
+    _ = gettext.gettext
 
 SERVICE = "astroarch-bridge.service"
 TOKEN_FILE = Path.home() / ".config" / "astroarch-bridge" / "token"
@@ -168,10 +194,24 @@ def http_json(url: str, token: str, timeout: float = 2.0) -> dict | None:
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        root.title("Astroarch Bridge — Dashboard")
+        root.title(_("Astroarch Bridge — Dashboard"))
         root.configure(bg=BG)
         root.geometry("520x540")
         root.minsize(480, 480)
+
+        try:
+            root.wm_wmclass("astroarchbridge", "AstroarchBridge")
+        except Exception:
+            pass
+
+        try:
+            icon_path = Path("/usr/share/astroarch-bridge/desktop_dashboard/astroarch_bridge.png")
+
+            if icon_path.exists():
+                self.window_icon = tk.PhotoImage(file=str(icon_path))
+                root.wm_iconphoto(True, self.window_icon)
+        except Exception as e:
+            print(f"Erreur chargement icône : {e}")
 
         title_font = tkfont.Font(family="DejaVu Sans", size=15, weight="bold")
         body_font = tkfont.Font(family="DejaVu Sans", size=10)
@@ -184,9 +224,9 @@ class App:
         # Header
         hdr = tk.Frame(outer, bg=BG)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="Astroarch ", bg=BG, fg=TEXT, font=title_font).pack(side="left")
-        tk.Label(hdr, text="Bridge", bg=BG, fg=ACCENT, font=title_font).pack(side="left")
-        tk.Label(hdr, text="  · Zarletti-Osservatorio Jupiter",
+        tk.Label(hdr, text=_("Astroarch "), bg=BG, fg=TEXT, font=title_font).pack(side="left")
+        tk.Label(hdr, text=_("Bridge"), bg=BG, fg=ACCENT, font=title_font).pack(side="left")
+        tk.Label(hdr, text=_("  · Zarletti-Osservatorio Jupiter"),
                  bg=BG, fg=MUTED, font=small_font).pack(side="left")
 
         # Big status card
@@ -224,15 +264,15 @@ class App:
 
         for i in range(3):
             info.columnconfigure(i, weight=1)
-        cell(info, "INDI", self.indi_var, 0)
-        cell(info, "PHD2", self.phd2_var, 1)
-        cell(info, "DEVICES", self.dev_var, 2)
-        cell(info, "PROPERTIES", self.props_var, 3)
-        cell(info, "WS STATE", self.ws_var, 4)
-        cell(info, "WS FRAMES", self.frames_var, 5)
+        cell(info, _("INDI"), self.indi_var, 0)
+        cell(info, _("PHD2"), self.phd2_var, 1)
+        cell(info, _("DEVICES"), self.dev_var, 2)
+        cell(info, _("PROPERTIES"), self.props_var, 3)
+        cell(info, _("WS STATE"), self.ws_var, 4)
+        cell(info, _("WS FRAMES"), self.frames_var, 5)
 
         # URL + token
-        access = tk.LabelFrame(outer, text=" App access ", bg=BG, fg=MUTED,
+        access = tk.LabelFrame(outer, text=_(" App access "), bg=BG, fg=MUTED,
                                font=small_font, bd=1, relief="solid",
                                labelanchor="nw", padx=10, pady=8)
         access.configure(highlightbackground=LINE)
@@ -240,7 +280,7 @@ class App:
 
         urlrow = tk.Frame(access, bg=BG)
         urlrow.pack(fill="x", pady=2)
-        tk.Label(urlrow, text="URL", bg=BG, fg=MUTED, font=small_font, width=7, anchor="w")\
+        tk.Label(urlrow, text=_("URL"), bg=BG, fg=MUTED, font=small_font, width=7, anchor="w")\
             .pack(side="left")
         self.url_var = tk.StringVar(value=self._auto_url())
         tk.Entry(urlrow, textvariable=self.url_var, bg=PANEL2, fg=TEXT,
@@ -252,17 +292,17 @@ class App:
 
         tokrow = tk.Frame(access, bg=BG)
         tokrow.pack(fill="x", pady=2)
-        tk.Label(tokrow, text="Token", bg=BG, fg=MUTED, font=small_font, width=7, anchor="w")\
+        tk.Label(tokrow, text=_("Token"), bg=BG, fg=MUTED, font=small_font, width=7, anchor="w")\
             .pack(side="left")
         self.token_var = tk.StringVar(value=read_token())
         tk.Entry(tokrow, textvariable=self.token_var, bg=PANEL2, fg=TEXT,
                  font=mono_font, relief="flat", insertbackground=TEXT,
                  readonlybackground=PANEL2, state="readonly").pack(side="left", fill="x", expand=True)
-        tk.Button(tokrow, text="Copy", command=self._copy_token, bg=ACCENT2, fg="black",
+        tk.Button(tokrow, text=_("Copy"), command=self._copy_token, bg=ACCENT2, fg="black",
                   font=small_font, relief="flat", padx=10).pack(side="left", padx=(6, 0))
 
         # QR code for mobile app
-        qrwrap = tk.LabelFrame(outer, text=" QR CODE for mobile app ", bg=BG, fg=MUTED,
+        qrwrap = tk.LabelFrame(outer, text=_(" QR CODE for mobile app "), bg=BG, fg=MUTED,
                                font=small_font, bd=1, relief="solid",
                                labelanchor="nw", padx=10, pady=8)
         qrwrap.pack(fill="x", pady=(10, 0))
@@ -272,19 +312,19 @@ class App:
         self.qr_canvas.pack(side="left", padx=(0, 12))
         qrinfo = tk.Frame(qrrow, bg=BG)
         qrinfo.pack(side="left", fill="both", expand=True)
-        tk.Label(qrinfo, text="Open the Astroarch Interface app,",
+        tk.Label(qrinfo, text=_("Open the Astroarch Interface app,"),
                  bg=BG, fg=TEXT, font=body_font, anchor="w", justify="left")\
             .pack(fill="x", anchor="w")
-        tk.Label(qrinfo, text="tap the 📷 SCAN QR button on the",
+        tk.Label(qrinfo, text=_("tap the 📷 SCAN QR button on the"),
                  bg=BG, fg=TEXT, font=body_font, anchor="w", justify="left")\
             .pack(fill="x", anchor="w")
-        tk.Label(qrinfo, text="Login screen.",
+        tk.Label(qrinfo, text=_("Login screen."),
                  bg=BG, fg=TEXT, font=body_font, anchor="w", justify="left")\
             .pack(fill="x", anchor="w")
-        tk.Label(qrinfo, text="Host, port and token will be",
+        tk.Label(qrinfo, text=_("Host, port and token will be"),
                  bg=BG, fg=MUTED, font=small_font, anchor="w", justify="left")\
             .pack(fill="x", anchor="w", pady=(8, 0))
-        tk.Label(qrinfo, text="filled in automatically.",
+        tk.Label(qrinfo, text=_("filled in automatically."),
                  bg=BG, fg=MUTED, font=small_font, anchor="w", justify="left")\
             .pack(fill="x", anchor="w")
         self.qr_status_var = tk.StringVar(value="")
@@ -294,21 +334,20 @@ class App:
         self._qr_image_ref = None  # keep reference to prevent GC
         self._render_qr()
 
-        # Buttons - "Connect/Disconnect" act on the systemd service:
-        # when the service is running, the mobile app can connect.
+        # Buttons - "Connect/Disconnect" act on the systemd service
         btns = tk.Frame(outer, bg=BG)
         btns.pack(fill="x", pady=(14, 0))
-        self._btn(btns, "▶ CONNECT", OK, self.start, 0)
-        self._btn(btns, "■ DISCONNECT", ERR, self.stop, 1)
-        self._btn(btns, "↻ Restart", ACCENT, self.restart, 2)
-        self._btn(btns, "≡ Log", PANEL2, self.show_log, 3)
+        self._btn(btns, _("▶ CONNECT"), OK, self.start, 0)
+        self._btn(btns, _("■ DISCONNECT"), ERR, self.stop, 1)
+        self._btn(btns, _("↻ Restart"), ACCENT, self.restart, 2)
+        self._btn(btns, _("≡ Log"), PANEL2, self.show_log, 3)
         for i in range(4):
             btns.columnconfigure(i, weight=1)
 
         # Log preview
         logbar = tk.Frame(outer, bg=BG)
         logbar.pack(fill="x", pady=(10, 4))
-        tk.Label(logbar, text="LATEST LOG LINES", bg=BG, fg=MUTED, font=small_font).pack(side="left")
+        tk.Label(logbar, text=_("LATEST LOG LINES"), bg=BG, fg=MUTED, font=small_font).pack(side="left")
         self.log_box = tk.Text(outer, bg="#05080e", fg=MUTED, font=mono_font,
                                height=8, relief="flat", borderwidth=1,
                                highlightbackground=LINE, highlightthickness=1)
@@ -347,15 +386,15 @@ class App:
         new_url = self._auto_url()
         self.url_var.set(new_url)
         self._render_qr()
-        self.footer_var.set(f"URL updated → {new_url}")
+        self.footer_var.set(_("URL updated → {}").format(new_url))
 
     # --- Actions ---
     def start(self):
         threading.Thread(target=self._svc_action, args=("start",), daemon=True).start()
 
     def stop(self):
-        if not messagebox.askyesno("Confirm",
-                                   "Stop the bridge? The mobile app will lose the connection."):
+        if not messagebox.askyesno(_("Confirm"),
+                                   _("Stop the bridge? The mobile app will lose the connection.")):
             return
         threading.Thread(target=self._svc_action, args=("stop",), daemon=True).start()
 
@@ -370,17 +409,17 @@ class App:
                 return
             except FileNotFoundError:
                 continue
-        messagebox.showwarning("Log",
-            "No terminal found. Open manually:\n  journalctl --user -u astroarch-bridge -f")
+        messagebox.showwarning(_("Log"),
+            _("No terminal found. Open manually:\n  journalctl --user -u astroarch-bridge -f"))
 
     def _svc_action(self, action: str):
         try:
             res = systemctl(action, SERVICE)
             self.footer_var.set(
-                f"systemctl {action}: rc={res.returncode} "
+                _("systemctl {}: rc={} ").format(action, res.returncode)
                 + (res.stderr.strip()[:80] if res.returncode else "ok"))
         except Exception as e:
-            self.footer_var.set(f"error: {e}")
+            self.footer_var.set(_("error: {}").format(e))
 
     def _copy_token(self):
         tok = self.token_var.get()
@@ -388,7 +427,7 @@ class App:
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(tok)
-        self.footer_var.set("Token copied to clipboard")
+        self.footer_var.set(_("Token copied to clipboard"))
 
     # --- QR code ---
     def _qr_payload(self) -> str:
@@ -412,7 +451,7 @@ class App:
 
     def _render_qr(self):
         if not _HAS_QR:
-            self.qr_canvas.configure(text="qrcode lib\nnot installed",
+            self.qr_canvas.configure(text=_("qrcode lib\nnot installed"),
                                      fg=ERR, bg=PANEL, width=24, height=12)
             return
         try:
@@ -429,9 +468,9 @@ class App:
             from tkinter import PhotoImage
             self._qr_image_ref = PhotoImage(data=buf.getvalue())
             self.qr_canvas.configure(image=self._qr_image_ref, width=200, height=200, text="")
-            self.qr_status_var.set(f"QR updated · {len(self._qr_payload())} bytes")
+            self.qr_status_var.set(_("QR updated · {} bytes").format(len(self._qr_payload())))
         except Exception as e:
-            self.qr_canvas.configure(text=f"QR error: {e}", bg=PANEL, fg=ERR)
+            self.qr_canvas.configure(text=_("QR error: {}").format(e), bg=PANEL, fg=ERR)
             self.qr_status_var.set("")
 
     # --- Refresh loop ---
@@ -466,7 +505,7 @@ class App:
                 capture_output=True, text=True, timeout=5)
             return r.stdout or ""
         except Exception as e:
-            return f"(log error: {e})"
+            return _("(log error: {})").format(e)
 
     def _maybe_update_url(self, new_url: str):
         """Updates the URL and QR only if the IP/port has changed."""
@@ -477,8 +516,8 @@ class App:
     def _update_status(self, st: str):
         color = {"active": OK, "activating": WARN, "reloading": WARN,
                  "inactive": MUTED, "failed": ERR}.get(st, MUTED)
-        labels = {"active": "Service active", "inactive": "Service stopped",
-                  "failed": "Service error", "activating": "Starting…"}
+        labels = {"active": _("Service active"), "inactive": _("Service stopped"),
+                  "failed": _("Service error"), "activating": _("Starting…")}
         self.status_dot_canvas.itemconfig(self.status_dot, fill=color)
         self.status_text.configure(text=labels.get(st, st), fg=color)
 
