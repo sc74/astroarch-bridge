@@ -161,6 +161,16 @@ def _esq_for_jobs(jobs: list[dict], target_name: str = "",
         delay = float(job.get("delaySec", 0))
         ft_label = _frame_type_label(job.get("frameType", "FRAME_LIGHT"))
         dither = "1" if job.get("ditherEachFrame") else "0"
+        # v0.3.3: setpoint temperatura per-job (opzionale).
+        # Se il job ha `temperatureC` valorizzata, emettiamo i tag
+        # <TemperatureValue> + <TemperatureEnforced>1 così Ekos attende
+        # il setpoint prima di avviare lo scatto del job. Se None,
+        # NON emettiamo nulla (Ekos parte alla T attuale del cooler —
+        # non-invasiveness rule, vedi commento in _esq_for_jobs docstring).
+        temp_c = job.get("temperatureC")
+        if temp_c is None:
+            # backward-compat: accetta anche la chiave plain "temperature"
+            temp_c = job.get("temperature")
         parts.append("<Job>")
         parts.append(f"<Exposure>{exp:g}</Exposure>")
         parts.append(f"<Format>{escape(cap_fmt_label)}</Format>")
@@ -175,6 +185,13 @@ def _esq_for_jobs(jobs: list[dict], target_name: str = "",
         if target:
             parts.append(f"<TargetName>{escape(target)}</TargetName>")
         parts.append(f"<GuideDitherPerJob>{dither}</GuideDitherPerJob>")
+        if temp_c is not None:
+            try:
+                temp_f = float(temp_c)
+                parts.append(f"<TemperatureValue>{temp_f:g}</TemperatureValue>")
+                parts.append("<TemperatureEnforced>1</TemperatureEnforced>")
+            except (TypeError, ValueError):
+                pass
         # NON-INVASIVENESS: tag opzionali, omessi se non specificati esplicitamente.
         # Quando omessi Ekos usa le impostazioni della sua UI/Preferenze.
         if fits_dir:

@@ -295,3 +295,111 @@ async def star_image(
                                  "X-Frame": str(payload["frame"] or "")})
     payload["png_base64"] = base64.b64encode(png_bytes).decode("ascii")
     return payload
+
+
+# v0.3.3: endpoint full-frame.
+# PHD2 JSON-RPC NON espone direttamente un'API per il frame intero della
+# camera di guida (`get_star_image` torna solo il crop ~100×100 intorno
+# alla stella). L'unico modo per recuperare il frame completo è chiamare
+# `save_image` che salva un FITS sul filesystem del Pi, poi lo leggiamo
+# noi, lo stretchiamo con lo stesso STF di PI e ritorniamo PNG.
+# Risultato: identico a quello che l'utente vede nella finestra principale
+# di PHD2 sul desktop.
+@router.get("/full_frame")
+async def full_frame(
+    fmt: str = "json", max_dim: int = 1024,
+    bridge: Bridge = Depends(get_bridge),
+):
+    """Frame completo della camera di guida via PHD2 save_image.
+
+    Query:
+      fmt:     "json" (default, ritorna PNG in base64) o "png" (binary stream)
+      max_dim: downscale alla dimensione massima richiesta (default 1024 px)
+               per ridurre traffico sulla rete Tailscale. 0 = no resize.
+
+    Flusso interno:
+      1. RPC `save_image` su PHD2 → ritorna {"filename": "/path/to.fits"}
+      2. Leggiamo il FITS con astropy
+      3. Auto-stretch (PixInsight STF) + downscale a max_dim
+      4. PNG encode + cleanup del FITS temporaneo
+    """
+    import base64
+    import io
+    import os
+    import numpy as np
+    from fastapi.responses import Response
+    from ..images.processor import _percentile_stretch
+
+    try:
+        res = await bridge.phd2.call("save_image", timeout=8.0)
+    except Phd2RpcError as e:
+        # Tipico: PHD2 non sta ancora loopando o non c'è una camera attiva
+        raise HTTPException(status_code=409, detail=f"PHD2: {e}")
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504,
+            detail="PHD2 timeout su save_image (camera attiva?)")
+    except ConnectionError as e:
+        raise HTTPException(status_code=503, detail=f"PHD2 not reachable: {e}")
+    except Exception as e:
+        _logger.exception("save_image unexpected")
+        raise HTTPException(status_code=500,
+            detail=f"PHD2 save_image unexpected: {type(e).__name__}: {e}")
+
+    if not isinstance(res, dict) or "filename" not in res:
+        raise HTTPException(status_code=502,
+                            detail=f"PHD2 save_image bad payload: {res}")
+    fits_path = res["filename"]
+
+    # Legge il FITS prodotto da PHD2
+    try:
+        from astropy.io import fits  # type: ignore
+        with fits.open(fits_path, memmap=False) as hdul:
+            data = np.asarray(hdul[0].data, dtype=np.float64)
+    except FileNotFoundError:
+        raise HTTPException(status_code=502,
+            detail=f"PHD2 ha salvato {fits_path} ma il bridge non lo trova "
+                   "(il bridge gira su un host diverso da PHD2?)")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"FITS read error: {e}")
+    finally:
+        # Cleanup: cancelliamo il FITS subito, è solo un buffer di trasferimento.
+        # Se fallisce non è grave (PHD2 sovrascrive comunque al prossimo save).
+        try:
+            os.unlink(fits_path)
+        except Exception:
+            pass
+
+    if data.ndim != 2:
+        raise HTTPException(status_code=502,
+            detail=f"FITS shape inattesa: {data.shape} (atteso 2D)")
+
+    h, w = data.shape
+    # Downscale opzionale per ridurre traffico via Tailscale
+    if max_dim > 0 and (w > max_dim or h > max_dim):
+        from PIL import Image  # local import to avoid forcing PIL global
+        stretched = _percentile_stretch(data)
+        img = Image.fromarray(stretched, mode="L")
+        scale = max_dim / max(w, h)
+        new_w = int(w * scale); new_h = int(h * scale)
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        w, h = new_w, new_h
+    else:
+        stretched = _percentile_stretch(data)
+        from PIL import Image
+        img = Image.fromarray(stretched, mode="L")
+
+    img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=False)
+    png_bytes = buf.getvalue()
+
+    if fmt.lower() == "png":
+        return Response(content=png_bytes, media_type="image/png",
+                        headers={"Cache-Control": "no-store",
+                                 "X-Width": str(w),
+                                 "X-Height": str(h)})
+    return {
+        "width": w,
+        "height": h,
+        "png_base64": base64.b64encode(png_bytes).decode("ascii"),
+    }
