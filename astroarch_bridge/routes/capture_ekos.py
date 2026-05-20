@@ -711,6 +711,45 @@ async def ekos_abort() -> dict:
     return {"ok": rc == 0, "raw": out}
 
 
+@router.post("/auto_dither_arm")
+async def auto_dither_arm(
+    payload: dict = Body(default={}),
+    bridge: Bridge = Depends(get_bridge),
+) -> dict:
+    """v0.3.5: arming MANUALE del watcher auto-dither.
+
+    Utile dopo un restart del bridge mentre una sequenza Ekos è già in corso
+    (la sequenza non viene interrotta dal restart, ma il watcher sì perché
+    il task asincrono viene perso). Senza questo endpoint l'utente dovrebbe
+    abort+restart della sequenza dall'app per ri-armare.
+
+    Body:
+      enabled: bool — true accende il watcher, false lo spegne
+      train:   str  — nome del train (es. 'Principale'); se omesso, viene
+                       letto dal userdb tramite CaptureTrainID
+    """
+    enabled = bool(payload.get("enabled", True))
+    if not enabled:
+        await _stop_auto_dither()
+        return {"ok": True, "enabled": False}
+
+    train = payload.get("train") or _read_active_train_name() or ""
+    # Re-read dither settings da Ekos (in case the user has changed them
+    # tra restart e arm)
+    ekos_dither = _read_ekos_dither_settings()
+    if ekos_dither.get("amount") is not None:
+        _auto_dither_state["amount"] = float(ekos_dither["amount"])
+    if ekos_dither.get("settle_time") is not None:
+        _auto_dither_state["settle_time"] = float(ekos_dither["settle_time"])
+    await _start_auto_dither(bridge, train)
+    return {
+        "ok": True, "enabled": True, "train": train,
+        "amount": _auto_dither_state["amount"],
+        "settle_time": _auto_dither_state["settle_time"],
+        "settle_pixels": _auto_dither_state["settle_pixels"],
+    }
+
+
 @router.get("/auto_dither_status")
 async def auto_dither_status() -> dict:
     """v0.3.4: stato del watcher auto-dither bridge-native.
