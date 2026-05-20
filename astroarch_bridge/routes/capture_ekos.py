@@ -259,6 +259,9 @@ _auto_dither_state = {
     "settle_pixels": 1.5,
     "settle_time": 10.0,
     "settle_timeout": 60.0,
+    # v0.3.6: dither solo ogni N frame (default 1 = ad ogni scatto)
+    "frequency": 1,
+    "ra_only": False,
 }
 
 
@@ -349,8 +352,18 @@ async def _auto_dither_worker() -> None:
                         break
                     if b"captureComplete" in line:
                         _auto_dither_state["frames_seen"] += 1
+                        frequency = max(1, int(_auto_dither_state.get("frequency") or 1))
+                        # v0.3.6: dither solo ogni N frame.
+                        # Es. frequency=3 → dither dopo i frame 3, 6, 9, ...
+                        if _auto_dither_state["frames_seen"] % frequency != 0:
+                            _logger.info("auto-dither: captureComplete #%d, "
+                                         "skip (frequency=%d, dither ogni %d)",
+                                         _auto_dither_state["frames_seen"],
+                                         frequency, frequency)
+                            continue
                         _logger.info("auto-dither: captureComplete intercepted "
-                                     "(frame #%d)", _auto_dither_state["frames_seen"])
+                                     "(frame #%d, frequency=%d) → DITHER",
+                                     _auto_dither_state["frames_seen"], frequency)
                         # Spawn cycle as task so we don't block the readline loop
                         asyncio.create_task(_auto_dither_cycle())
             finally:
@@ -393,12 +406,14 @@ async def _auto_dither_cycle() -> None:
         settle_pixels = _auto_dither_state["settle_pixels"]
         settle_time = _auto_dither_state["settle_time"]
         settle_timeout = _auto_dither_state["settle_timeout"]
+        ra_only = bool(_auto_dither_state.get("ra_only", False))
         _logger.info("auto-dither: dither RPC sent (amount=%.1fpx, settle_pixels=%.1fpx, "
-                     "settle_time=%.0fs)", amount, settle_pixels, settle_time)
+                     "settle_time=%.0fs, ra_only=%s)",
+                     amount, settle_pixels, settle_time, ra_only)
         try:
             await bridge.phd2.dither(
                 amount=amount,
-                ra_only=False,
+                ra_only=ra_only,
                 settle_pixels=settle_pixels,
                 settle_time=settle_time,
                 settle_timeout=settle_timeout,
@@ -622,21 +637,35 @@ async def ekos_run(payload: dict = Body(...), bridge: Bridge = Depends(get_bridg
         )
         started = rc3 == 0
         start_msg = out3
-    # v0.3.4/0.3.5: auto-dither bridge-native.
+    # v0.3.4–0.3.6: auto-dither bridge-native.
     # Se almeno un job ha `ditherEachFrame=true`, accendiamo il watcher che
     # via dbus-monitor intercetta `captureComplete` e chiama PHD2.dither().
     any_dither = any(bool(j.get("ditherEachFrame")) for j in jobs)
-    # v0.3.5: priorità ai parametri dither salvati dall'utente in Ekos
-    # (kstarsrc [Guide] DitherPixels / DitherSettle / DitherThreshold).
-    # Solo se l'app passa override espliciti per job li usiamo come override.
+    # Priorità dei parametri dither:
+    #   1) override TOP-LEVEL del payload (app v0.2.36+: pannello UI dither)
+    #   2) override per-job (CaptureJob.ditherAmount, raro)
+    #   3) Ekos kstarsrc [Guide] (DitherPixels/DitherSettle)
+    #   4) default ragionevoli
     ekos_dither = _read_ekos_dither_settings()
     if ekos_dither.get("amount") is not None:
         _auto_dither_state["amount"] = float(ekos_dither["amount"])
     if ekos_dither.get("settle_time") is not None:
         _auto_dither_state["settle_time"] = float(ekos_dither["settle_time"])
-    if ekos_dither.get("settle_pixels") is not None:
-        _auto_dither_state["settle_pixels"] = float(ekos_dither["settle_pixels"])
-    # Override per-job (raro): app può passare ditherAmount nel CaptureJob
+    # v0.3.6 default frequency: legge GuideDitherPerJobFrequency da [Capture] kstarsrc
+    cfg_kstars = Path.home() / ".config/kstarsrc"
+    if cfg_kstars.exists():
+        try:
+            in_cap = False
+            for line in cfg_kstars.read_text(encoding="utf-8").splitlines():
+                s = line.strip()
+                if s.startswith("[") and s.endswith("]"):
+                    in_cap = (s == "[Capture]"); continue
+                if in_cap and s.startswith("GuideDitherPerJobFrequency="):
+                    try: _auto_dither_state["frequency"] = max(1, int(s.split("=",1)[1]))
+                    except ValueError: pass
+        except Exception:
+            pass
+    # 2) Override per-job (raro)
     for j in jobs:
         if j.get("ditherAmount") is not None:
             _auto_dither_state["amount"] = float(j["ditherAmount"])
@@ -645,14 +674,27 @@ async def ekos_run(payload: dict = Body(...), bridge: Bridge = Depends(get_bridg
         if j.get("ditherSettleTime") is not None:
             _auto_dither_state["settle_time"] = float(j["ditherSettleTime"])
         break
+    # 1) Override TOP-LEVEL del payload (massima priorità — pannello UI app)
+    if payload.get("ditherAmount") is not None:
+        _auto_dither_state["amount"] = float(payload["ditherAmount"])
+    if payload.get("ditherSettleTime") is not None:
+        _auto_dither_state["settle_time"] = float(payload["ditherSettleTime"])
+    if payload.get("ditherSettlePixels") is not None:
+        _auto_dither_state["settle_pixels"] = float(payload["ditherSettlePixels"])
+    if payload.get("ditherFrequency") is not None:
+        _auto_dither_state["frequency"] = max(1, int(payload["ditherFrequency"]))
+    if payload.get("ditherRaOnly") is not None:
+        _auto_dither_state["ra_only"] = bool(payload["ditherRaOnly"])
     # v0.3.5: risolvi nome reale del train per il Capture.start() di restart
     # (se l'app passa train vuoto, leggiamo CaptureTrainID → nome dal userdb)
     effective_train = train or _read_active_train_name() or ""
     _logger.info("ekos_run: dither config — amount=%.1fpx settle_pixels=%.1f "
-                 "settle_time=%.0fs train=%r",
+                 "settle_time=%.0fs freq=%d ra_only=%s train=%r",
                  _auto_dither_state["amount"],
                  _auto_dither_state["settle_pixels"],
                  _auto_dither_state["settle_time"],
+                 _auto_dither_state["frequency"],
+                 _auto_dither_state["ra_only"],
                  effective_train)
     if any_dither and started:
         await _start_auto_dither(bridge, effective_train)
@@ -748,6 +790,57 @@ async def auto_dither_arm(
         "settle_time": _auto_dither_state["settle_time"],
         "settle_pixels": _auto_dither_state["settle_pixels"],
     }
+
+
+@router.get("/ekos_dither_settings")
+async def ekos_dither_settings() -> dict:
+    """v0.3.6: ritorna le impostazioni Dither che l'utente ha configurato
+    in Ekos (`~/.config/kstarsrc` sezione [Guide]).
+
+    Letti read-only. NON modifichiamo niente. Serve all'app come "sync
+    iniziale" del pannello Dither config: l'app può chiamare questo
+    endpoint per popolare i suoi slider con i valori Ekos correnti.
+
+    Ritorna:
+      amount        float — DitherPixels (px) — default 3.0 se mancante
+      settle_time   float — DitherSettle (s) — default 10.0
+      frequency     int   — GuideDitherPerJobFrequency — default 1
+      dither_enabled bool — DitherEnabled
+    """
+    cfg = Path.home() / ".config/kstarsrc"
+    out = {
+        "amount": 3.0, "settle_time": 10.0, "settle_pixels": 1.5,
+        "frequency": 1, "dither_enabled": True, "ra_only": False,
+    }
+    if not cfg.exists():
+        return {**out, "userdb_path": str(cfg), "exists": False}
+    try:
+        section = None
+        for line in cfg.read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            if s.startswith("[") and s.endswith("]"):
+                section = s
+                continue
+            if "=" not in s:
+                continue
+            k, _, v = s.partition("=")
+            k = k.strip(); v = v.strip()
+            if section == "[Guide]":
+                if k == "DitherPixels":
+                    try: out["amount"] = float(v)
+                    except ValueError: pass
+                elif k == "DitherSettle":
+                    try: out["settle_time"] = float(v)
+                    except ValueError: pass
+                elif k == "DitherEnabled":
+                    out["dither_enabled"] = v.lower() in ("true", "1")
+            elif section == "[Capture]":
+                if k == "GuideDitherPerJobFrequency":
+                    try: out["frequency"] = int(v)
+                    except ValueError: pass
+    except Exception as e:
+        _logger.warning("ekos_dither_settings parse error: %s", e)
+    return {**out, "userdb_path": str(cfg), "exists": True}
 
 
 @router.get("/auto_dither_status")
