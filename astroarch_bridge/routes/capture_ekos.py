@@ -221,6 +221,170 @@ def _esq_for_jobs(jobs: list[dict], target_name: str = "",
     return "\n".join(parts)
 
 
+# ============================================================================
+# v0.3.4: AUTO-DITHER tra scatti, bridge-native.
+# ============================================================================
+# Problema risolto:
+#   Il tag <GuideDitherPerJob>1</GuideDitherPerJob> nell'ESQ funziona solo se
+#   Ekos.Guide è collegato a PHD2 (`connectGuider`). Spesso quella connessione
+#   non è stabilita (l'utente non ha mai cliccato "Connect external" in Ekos),
+#   e il dither nativo Ekos non parte mai.
+#
+# Soluzione:
+#   Il bridge intercetta via dbus-monitor il signal `Ekos.Capture.captureComplete`
+#   (emesso dopo ogni frame salvato). Quando si attiva e il job ha
+#   `ditherEachFrame=true`, il bridge:
+#     1) Mette in PAUSA la sequenza Ekos (`Capture.pause`)
+#     2) Chiama `phd2.dither()` direttamente sul bridge (RPC PHD2)
+#     3) Aspetta che PHD2 abbia stabilizzato (settle_done event)
+#     4) Riavvia la sequenza Ekos (`Capture.start(train)`)
+#
+# Funziona indipendentemente dal fatto che Ekos↔PHD2 siano collegati o no.
+# Compatibile col dither nativo Ekos: se quello è attivo lo lasciamo fare,
+# il bridge serve solo come SAFETY NET.
+#
+# Vive come task asincrono singleton — start/stop pilotati da /ekos_run e
+# /ekos_abort.
+# ============================================================================
+
+_auto_dither_task: asyncio.Task | None = None
+_auto_dither_bridge = None  # type: ignore  # populated by ekos_run
+_auto_dither_state = {
+    "enabled": False,
+    "train": "",
+    "frames_seen": 0,
+    "last_dither_ts": None,
+    "last_error": None,
+    "amount": 3.0,
+    "settle_pixels": 1.5,
+    "settle_time": 10.0,
+    "settle_timeout": 60.0,
+}
+
+
+async def _auto_dither_worker() -> None:
+    """Long-running: ascolta dbus-monitor per `captureComplete` di Ekos.
+    Ad ogni evento esegue il ciclo pause → dither → start.
+    Restart automatico in caso di crash di dbus-monitor."""
+    while _auto_dither_state["enabled"]:
+        try:
+            env = os.environ.copy()
+            uid = os.getuid()
+            env.setdefault("DBUS_SESSION_BUS_ADDRESS",
+                           f"unix:path=/run/user/{uid}/bus")
+            proc = await asyncio.create_subprocess_exec(
+                "dbus-monitor", "--session",
+                "type='signal',interface='org.kde.kstars.Ekos.Capture',member='captureComplete'",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                env=env,
+            )
+            _logger.info("auto-dither: dbus-monitor started pid=%s", proc.pid)
+            try:
+                while _auto_dither_state["enabled"]:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    if b"captureComplete" in line:
+                        _auto_dither_state["frames_seen"] += 1
+                        _logger.info("auto-dither: captureComplete intercepted "
+                                     "(frame #%d)", _auto_dither_state["frames_seen"])
+                        # Spawn cycle as task so we don't block the readline loop
+                        asyncio.create_task(_auto_dither_cycle())
+            finally:
+                try:
+                    proc.terminate()
+                    await asyncio.wait_for(proc.wait(), timeout=2.0)
+                except Exception:
+                    pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            _logger.warning("auto-dither: monitor loop crashed: %s — retry in 3s", e)
+            await asyncio.sleep(3)
+
+
+async def _auto_dither_cycle() -> None:
+    """Esegue un ciclo: pause Ekos → dither PHD2 → restart Ekos."""
+    bridge = _auto_dither_bridge
+    if bridge is None:
+        _logger.warning("auto-dither: bridge non disponibile")
+        return
+    train = _auto_dither_state["train"]
+    try:
+        # 1) Pausa Ekos. È Q_NOREPLY → non aspetta risposta.
+        _logger.info("auto-dither: pausing Ekos.Capture")
+        await _dbus_call(EKOS_DBUS_SERVICE, EKOS_CAPTURE_PATH,
+                          "org.kde.kstars.Ekos.Capture.pause", timeout=5.0)
+        # piccola pausa per dare a Ekos tempo di processare il pause prima
+        # che PHD2 cominci il dither (evita race condition se Ekos stava
+        # per iniziare la prossima esposizione)
+        await asyncio.sleep(0.5)
+
+        # 2) Dither PHD2 con i parametri configurati
+        _logger.info("auto-dither: dithering PHD2 (amount=%.1f, settle=%.1f/%.0fs)",
+                     _auto_dither_state["amount"],
+                     _auto_dither_state["settle_pixels"],
+                     _auto_dither_state["settle_time"])
+        try:
+            await bridge.phd2.dither(
+                amount=_auto_dither_state["amount"],
+                ra_only=False,
+                settle_pixels=_auto_dither_state["settle_pixels"],
+                settle_time=_auto_dither_state["settle_time"],
+                settle_timeout=_auto_dither_state["settle_timeout"],
+            )
+            _auto_dither_state["last_dither_ts"] = time.time()
+            _auto_dither_state["last_error"] = None
+            _logger.info("auto-dither: PHD2 settled, resuming Ekos")
+        except Exception as e:
+            # Se PHD2 fallisce (es. non connesso), riprendiamo comunque Ekos
+            # — non vogliamo lasciare la sequenza in pausa permanente.
+            _auto_dither_state["last_error"] = f"PHD2 dither failed: {e}"
+            _logger.warning("auto-dither: PHD2 dither failed (%s), "
+                            "resuming Ekos comunque", e)
+
+        # 3) Riavvia Ekos.Capture passando il train (uguale al loadSequenceQueue)
+        await _dbus_call(EKOS_DBUS_SERVICE, EKOS_CAPTURE_PATH,
+                          "org.kde.kstars.Ekos.Capture.start", train, timeout=5.0)
+    except Exception as e:
+        _auto_dither_state["last_error"] = f"cycle failed: {e}"
+        _logger.exception("auto-dither cycle failed")
+        # Tentativo last-resort: prova a riavviare Ekos
+        try:
+            await _dbus_call(EKOS_DBUS_SERVICE, EKOS_CAPTURE_PATH,
+                              "org.kde.kstars.Ekos.Capture.start", train, timeout=5.0)
+        except Exception:
+            pass
+
+
+async def _start_auto_dither(bridge, train: str) -> None:
+    """Avvia il worker di auto-dither (idempotente)."""
+    global _auto_dither_task, _auto_dither_bridge
+    _auto_dither_bridge = bridge
+    _auto_dither_state["enabled"] = True
+    _auto_dither_state["train"] = train
+    _auto_dither_state["frames_seen"] = 0
+    _auto_dither_state["last_error"] = None
+    if _auto_dither_task is None or _auto_dither_task.done():
+        _auto_dither_task = asyncio.create_task(_auto_dither_worker())
+        _logger.info("auto-dither: worker started for train=%r", train)
+
+
+async def _stop_auto_dither() -> None:
+    """Ferma il worker di auto-dither (idempotente)."""
+    global _auto_dither_task
+    _auto_dither_state["enabled"] = False
+    if _auto_dither_task is not None and not _auto_dither_task.done():
+        _auto_dither_task.cancel()
+        try:
+            await _auto_dither_task
+        except (asyncio.CancelledError, Exception):
+            pass
+    _auto_dither_task = None
+    _logger.info("auto-dither: worker stopped")
+
+
 async def _dbus_call(*args: str, timeout: float = 10.0) -> tuple[int, str]:
     """Esegue qdbus6 e ritorna (returncode, stdout)."""
     env = os.environ.copy()
@@ -277,7 +441,7 @@ async def ekos_alive() -> dict:
 
 
 @router.post("/ekos_run")
-async def ekos_run(payload: dict = Body(...)) -> dict:
+async def ekos_run(payload: dict = Body(...), bridge: Bridge = Depends(get_bridge)) -> dict:
     """Genera ESQ dai jobs ricevuti, lo carica in Ekos Capture, avvia.
 
     Body:
@@ -360,6 +524,25 @@ async def ekos_run(payload: dict = Body(...)) -> dict:
         )
         started = rc3 == 0
         start_msg = out3
+    # v0.3.4: auto-dither bridge-native.
+    # Se almeno un job ha `ditherEachFrame=true`, accendiamo il watcher che
+    # via dbus-monitor intercetta `captureComplete` e chiama PHD2.dither().
+    # Se nessun job vuole dither, fermiamo eventuali watcher precedenti.
+    any_dither = any(bool(j.get("ditherEachFrame")) for j in jobs)
+    # Persistiamo le preferenze di settle dal primo job che ce le ha
+    # (oppure default ragionevoli)
+    for j in jobs:
+        if j.get("ditherAmount") is not None:
+            _auto_dither_state["amount"] = float(j["ditherAmount"])
+        if j.get("ditherSettlePixels") is not None:
+            _auto_dither_state["settle_pixels"] = float(j["ditherSettlePixels"])
+        if j.get("ditherSettleTime") is not None:
+            _auto_dither_state["settle_time"] = float(j["ditherSettleTime"])
+        break
+    if any_dither and started:
+        await _start_auto_dither(bridge, train)
+    else:
+        await _stop_auto_dither()
     return {
         "ok": True,
         "esq_path": str(esq_path),
@@ -368,6 +551,7 @@ async def ekos_run(payload: dict = Body(...)) -> dict:
         "started": started,
         "start_response": start_msg,
         "jobs_count": len(jobs),
+        "auto_dither_enabled": any_dither,
     }
 
 
@@ -405,9 +589,26 @@ async def ekos_status() -> dict:
 
 @router.post("/ekos_abort")
 async def ekos_abort() -> dict:
+    # v0.3.4: ferma anche il watcher auto-dither
+    await _stop_auto_dither()
     rc, out = await _dbus_call(EKOS_DBUS_SERVICE, EKOS_CAPTURE_PATH,
                                 "org.kde.kstars.Ekos.Capture.abort", "")
     return {"ok": rc == 0, "raw": out}
+
+
+@router.get("/auto_dither_status")
+async def auto_dither_status() -> dict:
+    """v0.3.4: stato del watcher auto-dither bridge-native.
+
+    Espone:
+      - enabled: se il watcher è attivo
+      - train: optical train che sta seguendo
+      - frames_seen: quanti captureComplete intercettati dalla partenza
+      - last_dither_ts: timestamp Unix dell'ultimo dither riuscito
+      - last_error: ultimo errore (None se tutto ok)
+      - amount / settle_*: parametri correnti del dither
+    """
+    return dict(_auto_dither_state)
 
 
 @router.post("/ekos_clear")
