@@ -99,14 +99,30 @@ def _read_service_port() -> int:
 
 
 def _best_ip() -> str:
-    """Determines the best IP to expose in the dashboard.
+    """Determines the best IP to expose in the dashboard / QR.
 
     Priority:
+    0. Tailscale IP (100.x.y.z) — reachable from ANYWHERE (preferred for the QR
+       so the mobile app connects from home, observatory or mobile data alike).
     1. Active WiFi hotspot (10.42.0.1 assigned to wlan0 by NetworkManager)
     2. Primary IP of wlan0 if connected to a modem/router
     3. Primary IP of eth0 / other physical interface
     4. Fallback 127.0.0.1
     """
+    # 0. Tailscale (best: works from any network). The QR/URL should point here
+    #    so a single scan configures the app for use anywhere.
+    try:
+        r = subprocess.run(
+            ["tailscale", "ip", "-4"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            ip = r.stdout.strip().splitlines()[0].strip()
+            if ip and not ip.startswith("127."):
+                return ip
+    except Exception:
+        pass
+
     # 1. Check if the AstroArch hotspot is active (NM connection type=wifi mode=ap)
     try:
         r = subprocess.run(

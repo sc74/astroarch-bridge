@@ -334,6 +334,21 @@ class Phd2Client:
     async def set_paused(self, paused: bool, full: bool = False) -> Any:
         return await self.call("set_paused", [paused, "full" if full else ""])
 
+    async def set_connected(self, connected: bool = True) -> Any:
+        """Connette/disconnette TUTTE le periferiche del profilo PHD2 attivo.
+        RPC PHD2: set_connected(true|false)."""
+        return await self.call("set_connected", [bool(connected)], timeout=30.0)
+
+    async def get_profiles(self) -> Any:
+        return await self.call("get_profiles")
+
+    async def get_profile(self) -> Any:
+        return await self.call("get_profile")
+
+    async def set_profile(self, profile_id: int) -> Any:
+        """Seleziona un profilo PHD2 per id (richiede equipment disconnesso)."""
+        return await self.call("set_profile", [int(profile_id)], timeout=15.0)
+
 
 class Phd2RpcError(Exception):
     def __init__(self, error: dict):
