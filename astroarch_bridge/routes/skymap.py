@@ -73,7 +73,17 @@ async def _get_focus() -> dict:
         root = ET.fromstring(out)
         def _f(tag):
             el = root.find(tag)
-            return float(el.text) if el is not None and el.text else None
+            if el is None or not el.text:
+                return None
+            try:
+                v = float(el.text)
+            except ValueError:
+                return None
+            # KStars in stato degenere (mappa vuota / puntamento indefinito)
+            # può restituire nan/inf → NON serializzabili in JSON. Li annulliamo.
+            if not math.isfinite(v):
+                return None
+            return v
         def _s(tag):
             el = root.find(tag)
             return el.text.strip() if el is not None and el.text else None
