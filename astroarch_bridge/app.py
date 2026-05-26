@@ -31,7 +31,8 @@ from .indi.protocol import IndiEvent
 from .phd2.client import Phd2Client
 from .routes import (
     align, camera, capture_ekos, files, filter_wheel, focuser, focuser_ekos,
-    guide, indi_panel, mount, observation, observatory, scheduler, setup, system,
+    guide, indi_panel, mount, observation, observatory, scheduler, setup, skymap,
+    system,
 )
 from .state import StateManager
 from .ws.frame_stream import frame_ws_endpoint, make_frame_listener
@@ -165,7 +166,7 @@ def create_app() -> FastAPI:
               filter_wheel.router, guide.router,
               observatory.router, files.router, align.router,
               scheduler.router, setup.router, capture_ekos.router,
-              observation.router):
+              observation.router, skymap.router):
         app.include_router(r)
 
     # WebSocket endpoints
