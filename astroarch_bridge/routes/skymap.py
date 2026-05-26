@@ -260,6 +260,49 @@ async def center_telescope() -> dict:
     return {"ok": True, "focus": await _get_focus()}
 
 
+@router.post("/pan")
+async def pan(payload: dict = Body(...)) -> dict:
+    """Scorri la mappa trascinando (come il mouse su KStars desktop).
+
+    L'app invia il delta del trascinamento in pixel dell'immagine + le sue
+    dimensioni. Il bridge calcola il nuovo centro (proiezione tangente dal
+    centro+FOV correnti) e ri-centra il SkyMap con setRaDec.
+
+    Convenzione "mappa che segue il dito": trascinare verso destra porta in
+    vista il cielo che era a sinistra (il centro si sposta di conseguenza).
+
+    Body: {"dx": float, "dy": float, "width": int, "height": int}
+      dx, dy = spostamento del dito in pixel (B - A) sull'immagine
+    """
+    if not await _kstars_alive():
+        raise _kstars_down_error()
+    try:
+        dx = float(payload["dx"]); dy = float(payload["dy"])
+        w = float(payload["width"]); h = float(payload["height"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Richiede dx, dy, width, height")
+
+    foc = await _get_focus()
+    if not foc or foc.get("ra_deg") is None:
+        raise _kstars_down_error()
+    fov = foc.get("fov_deg") or 10.0
+    deg_per_px = fov / w
+    dec0 = math.radians(foc["dec_deg"])
+    cosd = math.cos(dec0) if abs(math.cos(dec0)) > 1e-3 else 1e-3
+
+    # "Mappa segue il dito": trascino a destra (dx>0) → vedo cielo a sinistra
+    # → in equatoriale nord-su sinistra = RA crescente → centro RA aumenta.
+    ra_new = (foc["ra_deg"] + (dx * deg_per_px) / cosd) % 360.0
+    # trascino in basso (dy>0) → vedo cielo in alto → Dec aumenta
+    dec_new = max(-89.9, min(89.9, foc["dec_deg"] + dy * deg_per_px))
+
+    await _kstars_dbus("org.kde.kstars.setTracking", "false", timeout=5.0)
+    await _kstars_dbus("org.kde.kstars.setRaDec", f"{ra_new / 15.0:g}", f"{dec_new:g}",
+                       timeout=8.0)
+    await asyncio.sleep(0.3)
+    return {"ok": True, "focus": await _get_focus()}
+
+
 @router.post("/tap")
 async def tap(payload: dict = Body(...)) -> dict:
     """FASE 2: tap-to-goto.
