@@ -79,6 +79,14 @@ class Phd2Client:
         self._next_id = itertools.count(1)
         self._pending: dict[int, asyncio.Future] = {}
 
+        # Buffer a finestra mobile per calcolare la RMS dai campioni GuideStep.
+        # PHD2 NON emette un evento con la RMS: la GUI la calcola dai GuideStep.
+        # Replichiamo qui (≈ default PHD2: ultimi ~50 campioni).
+        from collections import deque
+        self._rms_window = 50
+        self._hist_ra: deque = deque(maxlen=self._rms_window)
+        self._hist_dec: deque = deque(maxlen=self._rms_window)
+
         # Stato live aggregato
         self.live: dict[str, Any] = {
             "app_state": Phd2AppState.STOPPED,
@@ -206,14 +214,36 @@ class Phd2Client:
             # = DEC). Senza salvarli qui, lo storico nell'app non avrebbe
             # mai dati per frame e il grafico di inseguimento resterebbe
             # vuoto (era il bug pre-v0.2.26).
-            self.live["ra_raw"] = msg.get("RADistanceRaw")
-            self.live["dec_raw"] = msg.get("DECDistanceRaw")
+            _ra = msg.get("RADistanceRaw")
+            _dec = msg.get("DECDistanceRaw")
+            self.live["ra_raw"] = _ra
+            self.live["dec_raw"] = _dec
             # Anche durata pulse e star mass per diagnostica avanzata
             self.live["ra_duration"] = msg.get("RADuration")
             self.live["dec_duration"] = msg.get("DECDuration")
             self.live["star_mass"] = msg.get("StarMass")
             self.live["avg_dist"] = msg.get("AvgDist")
             self.live["frame"] = msg.get("Frame")
+            # RMS calcolata dal bridge (PHD2 non manda un evento con la RMS):
+            # finestra mobile sui campioni, come fa la GUI di PHD2. Stesse unita'
+            # dei campioni del grafico (RADistanceRaw/DECDistanceRaw).
+            try:
+                if _ra is not None and _dec is not None:
+                    import math
+                    self._hist_ra.append(float(_ra))
+                    self._hist_dec.append(float(_dec))
+                    n = len(self._hist_ra)
+                    if n >= 2:
+                        rms_ra = math.sqrt(sum(x * x for x in self._hist_ra) / n)
+                        rms_dec = math.sqrt(sum(x * x for x in self._hist_dec) / n)
+                        self.live["rms_ra"] = round(rms_ra, 3)
+                        self.live["rms_dec"] = round(rms_dec, 3)
+                        self.live["rms_total"] = round(
+                            math.sqrt(rms_ra * rms_ra + rms_dec * rms_dec), 3)
+                        self.live["peak_ra"] = round(max(abs(x) for x in self._hist_ra), 3)
+                        self.live["peak_dec"] = round(max(abs(x) for x in self._hist_dec), 3)
+            except Exception:
+                pass
         elif name == "GuidingStats":
             self.live["rms_total"] = msg.get("RMS")
             self.live["rms_ra"] = msg.get("RaRMS")
@@ -228,6 +258,11 @@ class Phd2Client:
         elif name == "StartCalibration":
             self.live["calibrated"] = False
             self.live["app_state"] = Phd2AppState.CALIBRATING
+            # Nuova sessione: azzera lo storico per la RMS
+            self._hist_ra.clear()
+            self._hist_dec.clear()
+            for k in ("rms_total", "rms_ra", "rms_dec", "peak_ra", "peak_dec"):
+                self.live[k] = None
         elif name == "Settling":
             self.live["settling"] = True
         elif name == "SettleDone":
@@ -333,6 +368,21 @@ class Phd2Client:
 
     async def set_paused(self, paused: bool, full: bool = False) -> Any:
         return await self.call("set_paused", [paused, "full" if full else ""])
+
+    async def set_connected(self, connected: bool = True) -> Any:
+        """Connette/disconnette TUTTE le periferiche del profilo PHD2 attivo.
+        RPC PHD2: set_connected(true|false)."""
+        return await self.call("set_connected", [bool(connected)], timeout=30.0)
+
+    async def get_profiles(self) -> Any:
+        return await self.call("get_profiles")
+
+    async def get_profile(self) -> Any:
+        return await self.call("get_profile")
+
+    async def set_profile(self, profile_id: int) -> Any:
+        """Seleziona un profilo PHD2 per id (richiede equipment disconnesso)."""
+        return await self.call("set_profile", [int(profile_id)], timeout=15.0)
 
 
 class Phd2RpcError(Exception):

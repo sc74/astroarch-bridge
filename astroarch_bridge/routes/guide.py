@@ -75,17 +75,77 @@ async def dither(
     payload: dict = Body(default={}),
     bridge: Bridge = Depends(get_bridge),
 ) -> dict:
+    """Dither PHD2.
+
+    Se `wait=true` (default ora), dopo l'ACK della RPC blocca finché PHD2 emette
+    SettleDone (settling torna False) o scade `settle_timeout`. Cosi' il client
+    (app) sa che il settling e' davvero finito e puo' scattare il frame dopo
+    senza trail. Parametri settle presi dal payload (l'app passa i valori
+    configurati in Ekos/PHD2: amount 5px, settle_time 30s, ecc.).
+    """
+    import asyncio
+    import time as _time
+    amount = float(payload.get("amount", 3.0))
+    ra_only = bool(payload.get("ra_only", False))
+    settle_pixels = float(payload.get("settle_pixels", 1.5))
+    settle_time = float(payload.get("settle_time", 10.0))
+    settle_timeout = float(payload.get("settle_timeout", 60.0))
+    wait = bool(payload.get("wait", True))
     try:
         result = await bridge.phd2.dither(
-            amount=float(payload.get("amount", 3.0)),
-            ra_only=bool(payload.get("ra_only", False)),
-            settle_pixels=float(payload.get("settle_pixels", 1.5)),
-            settle_time=float(payload.get("settle_time", 10.0)),
-            settle_timeout=float(payload.get("settle_timeout", 60.0)),
+            amount=amount,
+            ra_only=ra_only,
+            settle_pixels=settle_pixels,
+            settle_time=settle_time,
+            settle_timeout=settle_timeout,
         )
     except Exception as e:
         raise _phd2_http_error("dither", e)
-    return {"ok": True, "result": result}
+
+    settled = None
+    if wait:
+        # Aspetta Settling=True (max 5s) poi Settling=False (max settle_timeout+5)
+        t0 = _time.monotonic()
+        while _time.monotonic() - t0 < 5.0:
+            if bridge.phd2.live.get("settling") is True:
+                break
+            await asyncio.sleep(0.2)
+        t1 = _time.monotonic()
+        max_wait = settle_timeout + 5.0
+        settled = True
+        while _time.monotonic() - t1 < max_wait:
+            if bridge.phd2.live.get("settling") is not True:
+                break
+            await asyncio.sleep(0.3)
+        else:
+            settled = False  # timeout
+    return {"ok": True, "result": result, "settled": settled}
+
+
+@router.post("/connect_equipment")
+async def connect_equipment(
+    payload: dict = Body(default={}),
+    bridge: Bridge = Depends(get_bridge),
+) -> dict:
+    """Connette TUTTE le periferiche del profilo PHD2 attivo (RPC set_connected).
+
+    Body opzionale: {"connected": true|false, "profile_id": <int>}.
+    Se `profile_id` e' fornito, prima disconnette, seleziona il profilo, poi
+    connette (PHD2 richiede equipment disconnesso per cambiare profilo).
+    """
+    connected = bool(payload.get("connected", True))
+    profile_id = payload.get("profile_id")
+    try:
+        if profile_id is not None:
+            try:
+                await bridge.phd2.set_connected(False)
+            except Exception:
+                pass
+            await bridge.phd2.set_profile(int(profile_id))
+        result = await bridge.phd2.set_connected(connected)
+    except Exception as e:
+        raise _phd2_http_error("connect_equipment", e)
+    return {"ok": True, "connected": connected, "result": result}
 
 
 @router.post("/loop")

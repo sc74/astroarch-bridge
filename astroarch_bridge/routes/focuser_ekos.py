@@ -45,6 +45,36 @@ _state: dict = {
 _lock = asyncio.Lock()
 _monitor_task: asyncio.Task | None = None
 
+# v0.3.13: nome del train attivo, risolto una volta e cachato.
+# CRITICO: in Ekos 3.8 il modulo Focus è multi-train e i metodi DBus
+# (status/camera/focuser/start...) prendono il nome del train. Chiamarli
+# con train VUOTO ("") fa creare a Ekos una NUOVA tab Focus ad ogni
+# chiamata → con il polling ogni 2s dell'app si aprivano decine di tab
+# "MoonLite". Passando SEMPRE il nome reale del train (es. "Principale")
+# tutte le chiamate colpiscono la STESSA tab.
+_cached_train: str | None = None
+
+
+def _resolve_focus_train(train: str = "") -> str:
+    """Ritorna il nome del train da usare per le chiamate Ekos.Focus.
+    Se il caller passa un train esplicito lo usa; altrimenti risolve il
+    train attivo dal userdb di KStars (CaptureTrainID → nome) e lo cacha.
+    Non ritorna mai stringa vuota se può evitarlo."""
+    global _cached_train
+    if train:
+        return train
+    if _cached_train:
+        return _cached_train
+    try:
+        from .capture_ekos import _read_active_train_name
+        name = _read_active_train_name()
+        if name:
+            _cached_train = name
+            return name
+    except Exception:
+        pass
+    return ""
+
 
 def _focus_status_label(s: int | None) -> str:
     """Enum Ekos FocusState (KStars 3.8.x):
@@ -171,6 +201,10 @@ async def ekos_state(train: str = "") -> dict:
     from .capture_ekos import _dbus_call, EKOS_DBUS_SERVICE
     focus_path = "/KStars/Ekos/Focus"
 
+    # v0.3.13: risolvi SEMPRE il nome train reale (mai vuoto) per non far
+    # creare a Ekos una nuova tab Focus ad ogni poll.
+    train = _resolve_focus_train(train)
+
     await _ensure_monitor()
 
     async def _g(method, *args):
@@ -232,7 +266,8 @@ async def ekos_start(payload: dict = Body(default={})) -> dict:
     """
     from .capture_ekos import _dbus_call, EKOS_DBUS_SERVICE
     focus_path = "/KStars/Ekos/Focus"
-    train = payload.get("train", "")
+    # v0.3.13: risolvi SEMPRE il train reale (mai vuoto) → una sola tab Focus
+    train = _resolve_focus_train(payload.get("train", ""))
 
     # Reset curva per nuovo run
     async with _lock:
@@ -279,7 +314,8 @@ async def ekos_start(payload: dict = Body(default={})) -> dict:
 @router.post("/ekos_abort")
 async def ekos_abort(payload: dict = Body(default={})) -> dict:
     from .capture_ekos import _dbus_call, EKOS_DBUS_SERVICE
-    train = payload.get("train", "")
+    # v0.3.13: train reale (mai vuoto)
+    train = _resolve_focus_train(payload.get("train", ""))
     rc, raw = await _dbus_call(EKOS_DBUS_SERVICE, "/KStars/Ekos/Focus",
         "org.kde.kstars.Ekos.Focus.abort", train)
     return {"ok": rc == 0, "raw": raw}
