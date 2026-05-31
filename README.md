@@ -263,11 +263,24 @@ attribution to Zarletti-Osservatorio Jupiter.
 
 ---
 
-## Credits
+## Team & contributors
+
+This project is built and improved by a small community of astrophotographers.
+
+| | Role | Contributions |
+|---|---|---|
+| **Gianpaolo Zarletti** (Zarletti-Osservatorio Jupiter) | Creator, lead developer & maintainer | Concept, architecture, app + bridge development |
+| **Mattia Procopio** ([MattBlack85](https://github.com/MattBlack85)) | Co-maintainer · packaging & distribution | `uv` migration, Makefile, pacman packaging, PKGBUILD & CI |
+| **Stéphane Carlin** ([sc74](https://github.com/sc74)) | Contributor | Multi-user PKGBUILD, broadcast-stream fix, desktop dashboard i18n (FR/ES/DE) |
+| **Benoit "Tucniak"** ([BenoitBotton](https://github.com/BenoitBotton)) | Contributor | French app localization, QA & testing on multiple hardware |
+
+Want to help? PRs and ideas are very welcome.
+
+## Credits (third-party)
 
 - **AstroArch** — [github.com/devDucks/astroarch](https://github.com/devDucks/astroarch)
 - **KStars / Ekos** — [edu.kde.org/kstars](https://edu.kde.org/kstars/)
 - **PHD2** — [openphdguiding.org](https://openphdguiding.org/)
 - **astrometry.net** — [astrometry.net](https://astrometry.net/)
 
-🌙 **Clear skies!** — Zarletti-Osservatorio Jupiter
+🌙 **Clear skies!** — Zarletti-Osservatorio Jupiter & contributors
