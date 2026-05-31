@@ -168,9 +168,98 @@ async def disk_usage(bridge: Bridge = Depends(get_bridge)) -> dict:
     }
 
 
+# ============================================================================
+# v0.3.14: navigazione directory + shortcut + listing sequenze (.esq)
+# ============================================================================
+# Segnalato da Tucniak: poter navigare le cartelle sul Pi e puntare a una
+# cartella diversa da ~/Pictures/Ekos. SICUREZZA: tutta la navigazione è
+# confinata DENTRO la home dell'utente (no path traversal verso / o /etc).
+
+def _user_root() -> Path:
+    return Path.home().resolve()
+
+
+@router.get("/roots")
+async def roots(bridge: Bridge = Depends(get_bridge)) -> dict:
+    """Shortcut comuni per il file browser dell'app (cartelle che esistono)."""
+    home = _user_root()
+    candidates = [
+        ("Ekos / Pictures", Path(bridge.images_dir)),
+        ("Desktop", home / "Desktop"),
+        ("Pictures", home / "Pictures"),
+        ("Home", home),
+        ("Documenti", home / "Documents"),
+    ]
+    out = []
+    seen = set()
+    for label, p in candidates:
+        try:
+            rp = p.resolve()
+        except OSError:
+            continue
+        if rp.exists() and rp.is_dir() and _is_inside(rp, home) and str(rp) not in seen:
+            seen.add(str(rp))
+            out.append({"label": label, "path": _rel_to_home(rp)})
+    return {"home": str(home), "roots": out}
+
+
+@router.get("/browse")
+async def browse(
+    path: str = Query("", description="path relativo alla home utente"),
+    only_dirs: bool = False,
+    exts: str = Query("", description="estensioni filtro, es. 'esq,fits' (vuoto=tutte)"),
+) -> dict:
+    """Naviga una directory DENTRO la home utente. Ritorna sottocartelle +
+    file (con size/mtime). `path` è relativo alla home. Protetto da
+    path-traversal (risolve e verifica che resti dentro la home)."""
+    home = _user_root()
+    target = (home / path).resolve() if path else home
+    if not _is_inside(target, home):
+        raise HTTPException(status_code=400, detail="path traversal blocked")
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(status_code=404, detail="directory not found")
+    ext_set = {e.strip().lower().lstrip(".") for e in exts.split(",") if e.strip()}
+    dirs, files = [], []
+    try:
+        for entry in sorted(target.iterdir(), key=lambda x: x.name.lower()):
+            if entry.name.startswith("."):
+                continue  # nascondi dotfile
+            if entry.is_dir():
+                dirs.append({"name": entry.name, "path": _rel_to_home(entry)})
+            elif not only_dirs:
+                if ext_set and entry.suffix.lower().lstrip(".") not in ext_set:
+                    continue
+                files.append({
+                    "name": entry.name, "path": _rel_to_home(entry),
+                    "size": _safe_size(entry), "mtime": _safe_mtime(entry),
+                })
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"read error: {e}")
+    parent = None
+    if target != home:
+        parent = _rel_to_home(target.parent)
+    return {
+        "path": _rel_to_home(target),
+        "abs": str(target),
+        "parent": parent,
+        "dirs": dirs,
+        "files": files,
+    }
+
+
+def _rel_to_home(p: Path) -> str:
+    """Path relativo alla home ('' = home stessa)."""
+    home = _user_root()
+    try:
+        rel = p.resolve().relative_to(home)
+        return str(rel) if str(rel) != "." else ""
+    except ValueError:
+        return ""
+
+
 def _is_inside(child: Path, parent: Path) -> bool:
     try:
-        child.relative_to(parent)
+        child.resolve().relative_to(parent.resolve())
         return True
     except ValueError:
         return False
