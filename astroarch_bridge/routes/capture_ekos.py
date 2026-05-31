@@ -865,6 +865,94 @@ async def ekos_clear() -> dict:
     return {"ok": rc == 0, "raw": out}
 
 
+# ============================================================================
+# v0.3.14: listing + caricamento sequenze .esq esistenti sul Pi (P6 Tucniak)
+# ============================================================================
+
+@router.get("/list_sequences")
+async def list_sequences() -> dict:
+    """Elenca i file sequenza Ekos (.esq) presenti sul Pi nelle cartelle
+    comuni (dentro la home utente). Per il picker 'Carica sequenza dal Pi'.
+    Restituisce path relativi alla home + size/mtime."""
+    home = Path.home().resolve()
+    search_dirs = [
+        home / "Pictures" / "Ekos",
+        home / "Desktop",
+        home / ".local" / "share" / "kstars",
+        home / "Documents",
+        home,
+    ]
+    found = {}
+    for d in search_dirs:
+        try:
+            if not d.exists():
+                continue
+            # ricerca non ricorsiva profonda: max 2 livelli per non impallarsi
+            for p in list(d.glob("*.esq")) + list(d.glob("*/*.esq")):
+                rp = p.resolve()
+                if rp in found:
+                    continue
+                try:
+                    rel = str(rp.relative_to(home))
+                except ValueError:
+                    continue
+                found[rp] = {
+                    "name": p.name, "path": rel,
+                    "dir": str(p.parent.relative_to(home)) if p.parent != home else "",
+                    "size": p.stat().st_size if p.exists() else 0,
+                    "mtime": p.stat().st_mtime if p.exists() else 0.0,
+                }
+        except OSError:
+            continue
+    items = sorted(found.values(), key=lambda x: x["mtime"], reverse=True)
+    return {"home": str(home), "count": len(items), "items": items}
+
+
+@router.post("/load_sequence_file")
+async def load_sequence_file(payload: dict = Body(...)) -> dict:
+    """Carica in Ekos un file .esq ESISTENTE sul Pi (path relativo alla home).
+    A differenza di /ekos_run (che genera un ESQ dai job dell'app), qui si
+    riusa una sequenza già salvata dall'utente. SICUREZZA: il path deve
+    restare dentro la home e avere estensione .esq.
+
+    Body: {"path": "Pictures/Ekos/M31.esq", "train": "", "auto_start": false}
+    """
+    rel = payload.get("path") or ""
+    home = Path.home().resolve()
+    full = (home / rel).resolve()
+    # protezione path-traversal + estensione
+    try:
+        full.relative_to(home)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="path traversal blocked")
+    if full.suffix.lower() != ".esq":
+        raise HTTPException(status_code=400, detail="non è un file .esq")
+    if not full.exists():
+        raise HTTPException(status_code=404, detail="file non trovato")
+
+    train = payload.get("train") or _read_active_train_name() or ""
+    target = payload.get("target") or ""
+    master = bool(payload.get("master", True))
+    auto_start = bool(payload.get("auto_start", False))
+
+    await _dbus_call(EKOS_DBUS_SERVICE, EKOS_CAPTURE_PATH,
+                     "org.kde.kstars.Ekos.Capture.clearSequenceQueue")
+    rc2, out2 = await _dbus_call(
+        EKOS_DBUS_SERVICE, EKOS_CAPTURE_PATH,
+        "org.kde.kstars.Ekos.Capture.loadSequenceQueue",
+        str(full), train, "true" if master else "false", target)
+    if rc2 != 0 or out2.lower() == "false":
+        raise HTTPException(status_code=500, detail=f"loadSequenceQueue failed: {out2}")
+
+    started = False
+    if auto_start:
+        rc3, _ = await _dbus_call(EKOS_DBUS_SERVICE, EKOS_CAPTURE_PATH,
+                                  "org.kde.kstars.Ekos.Capture.start", train)
+        started = rc3 == 0
+    return {"ok": True, "loaded": True, "file": str(full),
+            "started": started}
+
+
 @router.post("/preview_esq")
 async def preview_esq(payload: dict = Body(...)) -> dict:
     """Genera ESQ ma non lo invia. Utile per debug.
