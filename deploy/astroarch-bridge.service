@@ -16,6 +16,8 @@ StandardError=journal
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=read-only
+# systemd creates ConfigurationDirectory before namespace setup, unlike ExecStartPre
+ConfigurationDirectory=astroarch-bridge
 ReadWritePaths=%h/.config/astroarch-bridge %h/Pictures/Ekos
 
 # IMPORTANT: NOTHING PrivateTmp=true. The bridge must be able to read
